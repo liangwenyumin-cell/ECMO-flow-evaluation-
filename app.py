@@ -5,13 +5,10 @@ from datetime import datetime, time
 from scipy.stats import pearsonr, spearmanr
 
 # -------------------------
-# Page config
+# Page config + selector first (for theme)
 # -------------------------
 st.set_page_config(page_title="ECMO Trend Analyzer", layout="wide")
 
-# -------------------------
-# Page selector
-# -------------------------
 page = st.radio(
     "Page",
     ["Data Entry & Records Page", "Charts & Anysia Page"],
@@ -26,48 +23,114 @@ page_bg = "#FFF9E6" if page == "Data Entry & Records Page" else "#EAF4FF"  # lig
 st.markdown(
     f"""
     <style>
-      .stApp {{ background-color: {page_bg}; }}
+      /* Page background */
+      .stApp {{
+        background-color: {page_bg};
+      }}
 
+      /* Color tokens */
       :root {{
-        --card-bg: rgba(255,255,255,0.92);
-        --card-border: rgba(0,0,0,0.08);
+        --entry-card: rgba(255, 245, 210, 0.95);
+        --entry-soft: rgba(255, 250, 230, 0.95);
+
+        --analysis-card: rgba(225, 240, 255, 0.95);
+        --analysis-soft: rgba(235, 245, 255, 0.95);
+
+        --border-soft: rgba(0,0,0,0.08);
         --muted: rgba(0,0,0,0.55);
       }}
 
-      .block-container {{ padding-top: 1.1rem; padding-bottom: 2rem; }}
+      body {{
+        --card-bg: {"var(--entry-card)" if page == "Data Entry & Records Page" else "var(--analysis-card)"};
+        --soft-bg: {"var(--entry-soft)" if page == "Data Entry & Records Page" else "var(--analysis-soft)"};
+      }}
 
+      .block-container {{
+        padding-top: 1.1rem;
+        padding-bottom: 2rem;
+      }}
+
+      /* Hero */
       .hero {{
-        border: 1px solid var(--card-border);
-        background: linear-gradient(135deg, rgba(255,255,255,0.95), rgba(250,250,250,0.95));
+        border: 1px solid var(--border-soft);
+        background: var(--soft-bg);
         border-radius: 18px;
         padding: 16px 18px;
         margin-bottom: 14px;
       }}
-      .hero-title {{ font-size: 28px; font-weight: 800; margin: 0; }}
-      .hero-sub {{ margin-top: 6px; color: var(--muted); font-size: 14px; }}
+      .hero-title {{
+        font-size: 28px;
+        font-weight: 800;
+        margin: 0;
+      }}
+      .hero-sub {{
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 14px;
+      }}
 
+      /* Cards */
       .card {{
-        border: 1px solid var(--card-border);
+        border: 1px solid var(--border-soft);
         background: var(--card-bg);
         border-radius: 16px;
         padding: 14px;
         margin: 10px 0 14px 0;
       }}
+      .card h3 {{
+        margin: 0 0 6px 0;
+        font-size: 18px;
+      }}
+      .card p {{
+        margin: 0;
+        color: var(--muted);
+        font-size: 13px;
+      }}
 
-      label {{ font-size: 16px !important; }}
-      .stNumberInput input, .stDateInput input, .stTimeInput input {{ font-size: 18px !important; }}
+      /* Alerts */
+      .stAlert {{
+        background-color: var(--soft-bg) !important;
+        border: 1px solid var(--border-soft) !important;
+        border-radius: 14px !important;
+      }}
 
-      .stButton button, .stDownloadButton button {{
+      /* Inputs */
+      label {{
+        font-size: 16px !important;
+      }}
+      .stNumberInput input,
+      .stDateInput input,
+      .stTimeInput input {{
+        font-size: 18px !important;
+        background-color: #ffffff !important;
+      }}
+
+      /* Buttons */
+      .stButton button,
+      .stDownloadButton button {{
         font-size: 16px !important;
         padding: 10px 14px !important;
         border-radius: 12px !important;
+        background-color: var(--soft-bg) !important;
+        border: 1px solid var(--border-soft) !important;
       }}
-      thead tr th {{ font-size: 13px !important; }}
+
+      /* Data editor/table */
+      thead tr th {{
+        font-size: 13px !important;
+        background-color: var(--soft-bg) !important;
+      }}
+      tbody tr:nth-child(even) {{
+        background-color: rgba(0,0,0,0.02);
+      }}
     </style>
     """,
     unsafe_allow_html=True
 )
 
+# -------------------------
+# Header
+# -------------------------
 st.markdown(
     """
     <div class="hero">
@@ -111,10 +174,11 @@ def next_no(df: pd.DataFrame) -> int:
 # -------------------------
 if "data" not in st.session_state:
     st.session_state.data = pd.DataFrame(columns=COLUMNS)
+
 st.session_state.data = ensure_schema(st.session_state.data)
 
 # ======================================================
-# PAGE 1
+# PAGE 1: Data Entry & Records
 # ======================================================
 if page == "Data Entry & Records Page":
 
@@ -128,24 +192,25 @@ if page == "Data Entry & Records Page":
         unsafe_allow_html=True
     )
 
+    # Defaults from last record if available
     df_now = ensure_schema(st.session_state.data)
-
-    # Defaults: last record if exists, else sensible defaults
     if len(df_now) > 0 and df_now["No"].dropna().any():
         last = df_now.sort_values("No").iloc[-1]
-        def f(x, default):
-            return default if pd.isna(x) else x
-        d_flow = float(f(last.get("Flow"), 4.5))
-        d_rpm = int(f(last.get("RPM"), 3200))
-        d_dp = int(f(last.get("DeltaP"), 55))
-        d_hb = float(f(last.get("Hb"), 10.8))
-        d_glu = float(f(last.get("Glucose_mmol"), 8.0))
+
+        def pick(val, fallback):
+            return fallback if pd.isna(val) else val
+
+        d_flow = float(pick(last.get("Flow"), 4.5))
+        d_rpm = int(pick(last.get("RPM"), 3200))
+        d_dp = int(pick(last.get("DeltaP"), 55))
+        d_hb = float(pick(last.get("Hb"), 10.8))
+        d_glu = float(pick(last.get("Glucose_mmol"), 8.0))
     else:
         d_flow, d_rpm, d_dp, d_hb, d_glu = 4.5, 3200, 55, 10.8, 8.0
 
     with st.form("input_form", clear_on_submit=False):
         rec_date = st.date_input("Date", value=datetime.now().date())
-        rec_time = st.time_input("Time", value=time(8, 0))  # default 08:00
+        rec_time = st.time_input("Time", value=time(8, 0))  # default 08:00 (SG/TPE UTC+8)
 
         flow = st.number_input("ECMO Flow (L/min)", min_value=0.0, value=float(d_flow), step=0.1)
         rpm = st.number_input("Pump RPM", min_value=0, value=int(d_rpm), step=10)
@@ -155,34 +220,48 @@ if page == "Data Entry & Records Page":
 
         add = st.form_submit_button("Add record")
 
+    # ---- Add record with spinner + success ----
     if add:
         if flow <= 0:
             st.error("Flow must be > 0.")
         else:
-            rec_no = next_no(df_now)
-            recorded_at = datetime.combine(rec_date, rec_time)
+            with st.spinner("Saving..."):
+                # refresh df_now in case of quick consecutive adds
+                df_now = ensure_schema(st.session_state.data)
+                rec_no = next_no(df_now)
+                recorded_at = datetime.combine(rec_date, rec_time)
 
-            glucose_mg_dl = float(glucose_mmol) * 18.0
-            r_val = float(delta_p) / float(flow)
-            rpm_per_flow = float(rpm) / float(flow)
+                glucose_mg_dl = float(glucose_mmol) * 18.0
+                r_val = float(delta_p) / float(flow)
+                rpm_per_flow = float(rpm) / float(flow)
 
-            new_row = {
-                "No": rec_no,
-                "RecordedAt": recorded_at.isoformat(timespec="minutes"),
-                "Flow": float(flow),
-                "RPM": int(rpm),
-                "DeltaP": int(delta_p),
-                "Hb": round(float(hb), 1),
-                "Glucose_mmol": round(float(glucose_mmol), 1),
-                "Glucose_mg_dL": float(glucose_mg_dl),
-                "r": float(r_val),
-                "RPM_per_Flow": float(rpm_per_flow),
-            }
+                new_row = {
+                    "No": rec_no,
+                    "RecordedAt": recorded_at.isoformat(timespec="minutes"),
+                    "Flow": float(flow),
+                    "RPM": int(rpm),
+                    "DeltaP": int(delta_p),
+                    "Hb": round(float(hb), 1),
+                    "Glucose_mmol": round(float(glucose_mmol), 1),
+                    "Glucose_mg_dL": float(glucose_mg_dl),
+                    "r": float(r_val),
+                    "RPM_per_Flow": float(rpm_per_flow),
+                }
 
-            st.session_state.data = pd.concat([df_now, pd.DataFrame([new_row])], ignore_index=True)
-            st.success("Record added. Remember to download CSV as backup.")
+                st.session_state.data = pd.concat(
+                    [df_now, pd.DataFrame([new_row])],
+                    ignore_index=True
+                )
 
-    # ---- Restore under Add Record ----
+            st.success("✅ Saved successfully.")
+            try:
+                st.toast("Saved successfully.", icon="✅")
+            except Exception:
+                pass
+
+            st.info(f"Total records: {len(st.session_state.data)} | Latest No: {rec_no}")
+
+    # ---- Restore from CSV (under Add Record) ----
     st.markdown(
         """
         <div class="card">
@@ -195,14 +274,19 @@ if page == "Data Entry & Records Page":
 
     uploaded = st.file_uploader("Upload CSV", type=["csv"])
     if uploaded is not None:
-        try:
-            loaded = pd.read_csv(uploaded)
-            st.session_state.data = ensure_schema(loaded)
-            st.success(f"Restored {len(st.session_state.data)} records.")
-        except Exception as e:
-            st.error(f"Failed to load CSV: {e}")
+        with st.spinner("Restoring..."):
+            try:
+                loaded = pd.read_csv(uploaded)
+                st.session_state.data = ensure_schema(loaded)
+                st.success(f"✅ Restored {len(st.session_state.data)} records.")
+                try:
+                    st.toast("Restored from CSV.", icon="✅")
+                except Exception:
+                    pass
+            except Exception as e:
+                st.error(f"Failed to load CSV: {e}")
 
-    # ---- Editable table ----
+    # ---- Records (Editable) ----
     st.markdown(
         """
         <div class="card">
@@ -223,29 +307,39 @@ if page == "Data Entry & Records Page":
         edited = st.data_editor(df_disp, use_container_width=True, hide_index=True)
 
         st.info("Edits are not saved until you click **Apply changes**.")
+
+        # ---- Apply changes with spinner + success ----
         if st.button("Apply changes"):
-            saved = edited.copy()
-            parsed = pd.to_datetime(saved["RecordedAt"], errors="coerce")
-            if parsed.isna().any():
-                st.error("Invalid datetime format. Use YYYY-MM-DD HH:MM.")
-            else:
-                saved["RecordedAt"] = parsed.dt.strftime("%Y-%m-%dT%H:%M")
-                saved["Flow"] = pd.to_numeric(saved["Flow"], errors="coerce")
-                saved["RPM"] = pd.to_numeric(saved["RPM"], errors="coerce")
-                saved["DeltaP"] = pd.to_numeric(saved["DeltaP"], errors="coerce").round(0).astype("Int64")
-                saved["Hb"] = pd.to_numeric(saved["Hb"], errors="coerce")
-                saved["Glucose_mmol"] = pd.to_numeric(saved["Glucose_mmol"], errors="coerce")
-
-                # Prevent divide-by-zero rows
-                if (saved["Flow"] <= 0).any():
-                    st.error("Flow must be > 0 for all rows.")
+            with st.spinner("Applying changes..."):
+                saved = edited.copy()
+                parsed = pd.to_datetime(saved["RecordedAt"], errors="coerce")
+                if parsed.isna().any():
+                    st.error("Invalid datetime format. Use YYYY-MM-DD HH:MM.")
                 else:
-                    saved["Glucose_mg_dL"] = saved["Glucose_mmol"] * 18.0
-                    saved["r"] = saved["DeltaP"].astype(float) / saved["Flow"].astype(float)
-                    saved["RPM_per_Flow"] = saved["RPM"].astype(float) / saved["Flow"].astype(float)
+                    saved["RecordedAt"] = parsed.dt.strftime("%Y-%m-%dT%H:%M")
+                    saved["Flow"] = pd.to_numeric(saved["Flow"], errors="coerce")
+                    saved["RPM"] = pd.to_numeric(saved["RPM"], errors="coerce")
+                    saved["DeltaP"] = pd.to_numeric(saved["DeltaP"], errors="coerce").round(0).astype("Int64")
+                    saved["Hb"] = pd.to_numeric(saved["Hb"], errors="coerce")
+                    saved["Glucose_mmol"] = pd.to_numeric(saved["Glucose_mmol"], errors="coerce")
 
-                    st.session_state.data = ensure_schema(saved)
-                    st.success("Changes applied.")
+                    # Prevent divide-by-zero rows
+                    if (saved["Flow"] <= 0).any():
+                        st.error("Flow must be > 0 for all rows.")
+                    else:
+                        saved["Glucose_mg_dL"] = saved["Glucose_mmol"] * 18.0
+                        saved["r"] = saved["DeltaP"].astype(float) / saved["Flow"].astype(float)
+                        saved["RPM_per_Flow"] = saved["RPM"].astype(float) / saved["Flow"].astype(float)
+
+                        st.session_state.data = ensure_schema(saved)
+
+                        st.success("✅ Changes applied successfully.")
+                        try:
+                            st.toast("Changes applied.", icon="✅")
+                        except Exception:
+                            pass
+
+                        st.info(f"Total records: {len(st.session_state.data)}")
 
     # ---- Export ----
     st.markdown(
@@ -261,7 +355,7 @@ if page == "Data Entry & Records Page":
     st.download_button("Download CSV", data=csv, file_name="ecmo_trend_data.csv", mime="text/csv")
 
 # ======================================================
-# PAGE 2
+# PAGE 2: Charts & Anysia
 # ======================================================
 else:
     df = ensure_schema(st.session_state.data)
@@ -272,7 +366,15 @@ else:
     df["RecordedAt_dt"] = pd.to_datetime(df["RecordedAt"], errors="coerce")
     plot_df = df.dropna(subset=["RecordedAt_dt"]).sort_values("RecordedAt_dt")
 
-    st.markdown('<div class="card"><h3>📈 Trends</h3><p>Large charts for analysis view.</p></div>', unsafe_allow_html=True)
+    st.markdown(
+        """
+        <div class="card">
+          <h3>📈 Trends</h3>
+          <p>Large charts for analysis view.</p>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
     for title, y, ylabel in [
         ("Delta P Trend Over Time", "DeltaP", "Delta P (mmHg)"),
@@ -287,7 +389,15 @@ else:
         fig.autofmt_xdate()
         st.pyplot(fig, clear_figure=True)
 
-    st.markdown('<div class="card"><h3>🔎 RPM–Flow Coupling</h3><p>Scatter plot colored by r.</p></div>', unsafe_allow_html=True)
+    st.markdown(
+        """
+        <div class="card">
+          <h3>🔎 RPM–Flow Coupling</h3>
+          <p>Scatter plot colored by r.</p>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
     fig, ax = plt.subplots()
     sc = ax.scatter(plot_df["RPM"], plot_df["Flow"], c=plot_df["r"], cmap="viridis")
@@ -302,12 +412,20 @@ else:
         "Interpretation: When RPM increases without proportional Flow increase, elevated r suggests increased circuit resistance."
     )
 
-    st.markdown('<div class="card"><h3>🧪 Correlation Analysis</h3></div>', unsafe_allow_html=True)
+    st.markdown(
+        """
+        <div class="card">
+          <h3>🧪 Correlation Analysis</h3>
+          <p>Pearson (linear) and Spearman (rank) correlation between r and Hb / Glucose.</p>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
     def corr_block(x, y, x_name, y_name):
         d = pd.DataFrame({"x": x, "y": y}).dropna()
         if len(d) < 3:
-            st.warning(f"Not enough data for {y_name} vs {x_name}.")
+            st.warning(f"Not enough data for {y_name} vs {x_name} (n={len(d)}).")
             return
         pr, pp = pearsonr(d["x"], d["y"])
         sr, sp = spearmanr(d["x"], d["y"])

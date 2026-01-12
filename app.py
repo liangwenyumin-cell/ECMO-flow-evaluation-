@@ -7,7 +7,7 @@ from scipy.stats import pearsonr, spearmanr
 st.set_page_config(page_title="ECMO Trend Analyzer", layout="wide")
 st.title("ECMO Trend Analyzer")
 st.caption(
-    "Backfillable date/time • r = Delta P / Flow • Trends • RPM–Flow coupling (colored by r) • Correlations"
+    "Backfillable date/time • r = Delta P / Flow • Trends • RPM–Flow coupling (colored by r) • Correlations • CSV restore"
 )
 
 # -------------------------
@@ -18,11 +18,35 @@ COLUMNS = [
     "Flow", "RPM", "DeltaP", "Hb",
     "Glucose_mmol", "Glucose_mg_dL",
     "r",
-    "RPM_per_Flow",  # pump inefficiency index
+    "RPM_per_Flow",
 ]
 
 if "data" not in st.session_state:
     st.session_state.data = pd.DataFrame(columns=COLUMNS)
+
+# -------------------------
+# Data persistence (Option A): Restore from CSV
+# -------------------------
+st.subheader("Data Persistence (CSV Restore)")
+st.caption(
+    "To prevent data loss after refresh/closing the tab: download CSV regularly and restore via CSV upload."
+)
+
+uploaded = st.file_uploader("Restore from CSV", type=["csv"])
+if uploaded is not None:
+    try:
+        loaded = pd.read_csv(uploaded)
+        required_cols = set(COLUMNS)
+        if not required_cols.issubset(set(loaded.columns)):
+            st.error("CSV format mismatch. Please upload a CSV exported from this app.")
+        else:
+            loaded = loaded[COLUMNS].copy()
+            st.session_state.data = loaded
+            st.success(f"Restored {len(loaded)} records from CSV. You can continue adding records now.")
+    except Exception as e:
+        st.error(f"Failed to load CSV: {e}")
+
+st.divider()
 
 # -------------------------
 # Input form
@@ -91,6 +115,12 @@ if add:
         ignore_index=True
     )
 
+    # Friendly reminder to backup
+    try:
+        st.toast("Record added. Tip: Download CSV to avoid losing data on refresh/close.", icon="💾")
+    except Exception:
+        st.info("Record added. Tip: Download CSV to avoid losing data on refresh/close.")
+
 # -------------------------
 # Controls
 # -------------------------
@@ -98,9 +128,14 @@ ctrl1, ctrl2, _ = st.columns([1, 1, 3])
 with ctrl1:
     if st.button("Delete last record") and len(st.session_state.data) > 0:
         st.session_state.data = st.session_state.data.iloc[:-1].reset_index(drop=True)
+
 with ctrl2:
+    confirm_clear = st.checkbox("I understand this will delete all records", value=False)
     if st.button("Clear all records"):
-        st.session_state.data = st.session_state.data.iloc[0:0]
+        if confirm_clear:
+            st.session_state.data = st.session_state.data.iloc[0:0]
+        else:
+            st.warning("Please confirm before clearing all records.")
 
 # -------------------------
 # Table
@@ -117,7 +152,6 @@ show_df["RecordedAt"] = pd.to_datetime(
     show_df["RecordedAt"], errors="coerce"
 ).dt.strftime("%Y-%m-%d %H:%M")
 
-# Display formatting
 show_df["DeltaP"] = show_df["DeltaP"].astype(int)
 show_df["Hb"] = show_df["Hb"].map(lambda x: f"{x:.1f}")
 show_df["Glucose_mmol"] = show_df["Glucose_mmol"].map(lambda x: f"{x:.1f}")

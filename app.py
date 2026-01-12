@@ -6,16 +6,18 @@ from scipy.stats import pearsonr, spearmanr
 
 st.set_page_config(page_title="ECMO Trend Analyzer", layout="wide")
 st.title("ECMO Trend Analyzer")
-st.caption("Backfillable date/time input • r = Delta P / Flow • Trend plots • Correlation tests (r vs Hb, r vs Glucose)")
+st.caption(
+    "Backfillable date/time • r = Delta P / Flow • Trend plots • Correlation (r vs Hb, r vs Glucose)"
+)
 
 # -------------------------
-# Session state: data store
+# Session state
 # -------------------------
 COLUMNS = [
-    "RecordedAt",          # user-entered datetime (for backfilling)
+    "RecordedAt",
     "Flow", "RPM", "DeltaP", "Hb",
     "Glucose_mmol", "Glucose_mg_dL",
-    "r"                    # r = DeltaP / Flow
+    "r"
 ]
 
 if "data" not in st.session_state:
@@ -27,18 +29,42 @@ if "data" not in st.session_state:
 with st.form("input_form", clear_on_submit=False):
     t1, t2 = st.columns(2)
     rec_date = t1.date_input("Date", value=datetime.now().date())
-    rec_time = t2.time_input("Time", value=datetime.now().time().replace(second=0, microsecond=0))
+    rec_time = t2.time_input(
+        "Time",
+        value=datetime.now().time().replace(second=0, microsecond=0)
+    )
     recorded_at = datetime.combine(rec_date, rec_time)
 
     c1, c2, c3, c4, c5 = st.columns(5)
-    flow = c1.number_input("ECMO Flow (L/min)", min_value=0.1, value=4.5, step=0.1)
-    rpm = c2.number_input("Pump RPM", min_value=0, value=3200, step=10)
-    delta_p = c3.number_input("Delta P (mmHg)", min_value=0.1, value=55.0, step=0.5)
-    hb = c4.number_input("Hemoglobin (g/dL)", min_value=0.1, value=10.8, step=0.1)
-    glucose_mmol = c5.number_input("Glucose (mmol/L)", min_value=0.1, value=8.0, step=0.1)
+
+    flow = c1.number_input(
+        "ECMO Flow (L/min)", min_value=0.1, value=4.5, step=0.1
+    )
+
+    rpm = c2.number_input(
+        "Pump RPM", min_value=0, value=3200, step=10
+    )
+
+    # ✅ Delta P: integer
+    delta_p = c3.number_input(
+        "Delta P (mmHg)", min_value=0, value=55, step=1, format="%d"
+    )
+
+    # ✅ Hb: 1 decimal
+    hb = c4.number_input(
+        "Hemoglobin (g/dL)", min_value=0.0, value=10.8, step=0.1, format="%.1f"
+    )
+
+    # ✅ Glucose: 1 decimal (mmol/L)
+    glucose_mmol = c5.number_input(
+        "Glucose (mmol/L)", min_value=0.0, value=8.0, step=0.1, format="%.1f"
+    )
 
     add = st.form_submit_button("Add record")
 
+# -------------------------
+# Add row
+# -------------------------
 def compute_r(delta_p_val: float, flow_val: float) -> float:
     return delta_p_val / flow_val
 
@@ -50,7 +76,7 @@ if add:
         "RecordedAt": recorded_at.isoformat(timespec="minutes"),
         "Flow": float(flow),
         "RPM": int(rpm),
-        "DeltaP": float(delta_p),
+        "DeltaP": int(delta_p),          # keep integer
         "Hb": float(hb),
         "Glucose_mmol": float(glucose_mmol),
         "Glucose_mg_dL": float(glucose_mg_dl),
@@ -65,7 +91,7 @@ if add:
 # -------------------------
 # Controls
 # -------------------------
-ctrl1, ctrl2, ctrl3 = st.columns([1, 1, 3])
+ctrl1, ctrl2, _ = st.columns([1, 1, 3])
 with ctrl1:
     if st.button("Delete last record") and len(st.session_state.data) > 0:
         st.session_state.data = st.session_state.data.iloc[:-1].reset_index(drop=True)
@@ -84,13 +110,19 @@ if len(df) == 0:
     st.stop()
 
 show_df = df.copy()
-show_df["RecordedAt"] = pd.to_datetime(show_df["RecordedAt"], errors="coerce").dt.strftime("%Y-%m-%d %H:%M")
+show_df["RecordedAt"] = pd.to_datetime(
+    show_df["RecordedAt"], errors="coerce"
+).dt.strftime("%Y-%m-%d %H:%M")
+
+show_df["DeltaP"] = show_df["DeltaP"].astype(int)
+show_df["Hb"] = show_df["Hb"].map(lambda x: f"{x:.1f}")
+show_df["Glucose_mmol"] = show_df["Glucose_mmol"].map(lambda x: f"{x:.1f}")
 show_df["r"] = show_df["r"].map(lambda x: f"{x:.4f}")
-show_df["Glucose_mg_dL"] = show_df["Glucose_mg_dL"].map(lambda x: f"{x:.1f}")
+
 st.dataframe(show_df, use_container_width=True)
 
 # -------------------------
-# Trend plots: X = time
+# Trend plots
 # -------------------------
 st.subheader("Trends (X-axis: Time)")
 
@@ -119,25 +151,23 @@ with p2:
     st.pyplot(fig, clear_figure=True)
 
 # -------------------------
-# Correlation tests: r vs Hb, r vs Glucose
+# Correlation
 # -------------------------
-st.subheader("Correlation (r vs Hb, r vs Glucose)")
+st.subheader("Correlation Analysis")
 
 def corr_block(x: pd.Series, y: pd.Series, x_name: str, y_name: str):
     d = pd.DataFrame({"x": x, "y": y}).dropna()
     n = len(d)
     if n < 3:
-        st.warning(f"Not enough data for correlation: {y_name} vs {x_name} (n={n}). Add more records.")
+        st.warning(f"Not enough data for correlation: {y_name} vs {x_name} (n={n})")
         return
 
-    # Pearson (linear)
-    pear_r, pear_p = pearsonr(d["x"], d["y"])
-    # Spearman (rank-based, robust to non-linearity/outliers)
-    spea_r, spea_p = spearmanr(d["x"], d["y"])
+    pr, pp = pearsonr(d["x"], d["y"])
+    sr, sp = spearmanr(d["x"], d["y"])
 
     st.write(f"**{y_name} vs {x_name}** (n={n})")
-    st.write(f"- Pearson r = {pear_r:.3f}, p = {pear_p:.4g}")
-    st.write(f"- Spearman ρ = {spea_r:.3f}, p = {spea_p:.4g}")
+    st.write(f"- Pearson r = {pr:.3f}, p = {pp:.4g}")
+    st.write(f"- Spearman ρ = {sr:.3f}, p = {sp:.4g}")
 
     fig, ax = plt.subplots()
     ax.scatter(d["x"], d["y"])
@@ -158,4 +188,9 @@ with c2:
 st.divider()
 st.subheader("Export")
 csv = df.to_csv(index=False).encode("utf-8")
-st.download_button("Download CSV", data=csv, file_name="ecmo_trend_data.csv", mime="text/csv")
+st.download_button(
+    "Download CSV",
+    data=csv,
+    file_name="ecmo_trend_data.csv",
+    mime="text/csv"
+)

@@ -226,7 +226,6 @@ if page == "Data Entry & Records Page":
             st.error("Flow must be > 0.")
         else:
             with st.spinner("Saving..."):
-                # refresh df_now in case of quick consecutive adds
                 df_now = ensure_schema(st.session_state.data)
                 rec_no = next_no(df_now)
                 recorded_at = datetime.combine(rec_date, rec_time)
@@ -248,10 +247,7 @@ if page == "Data Entry & Records Page":
                     "RPM_per_Flow": float(rpm_per_flow),
                 }
 
-                st.session_state.data = pd.concat(
-                    [df_now, pd.DataFrame([new_row])],
-                    ignore_index=True
-                )
+                st.session_state.data = pd.concat([df_now, pd.DataFrame([new_row])], ignore_index=True)
 
             st.success("✅ Saved successfully.")
             try:
@@ -283,6 +279,11 @@ if page == "Data Entry & Records Page":
                     st.toast("Restored from CSV.", icon="✅")
                 except Exception:
                     pass
+
+                # ✅ Key fix: force a clean rerun so the rest of the page
+                # uses the newly restored data immediately (prevents "missing rows" glitch).
+                st.rerun()
+
             except Exception as e:
                 st.error(f"Failed to load CSV: {e}")
 
@@ -323,7 +324,6 @@ if page == "Data Entry & Records Page":
                     saved["Hb"] = pd.to_numeric(saved["Hb"], errors="coerce")
                     saved["Glucose_mmol"] = pd.to_numeric(saved["Glucose_mmol"], errors="coerce")
 
-                    # Prevent divide-by-zero rows
                     if (saved["Flow"] <= 0).any():
                         st.error("Flow must be > 0 for all rows.")
                     else:

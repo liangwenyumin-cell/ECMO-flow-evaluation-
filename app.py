@@ -16,7 +16,7 @@ page = st.radio(
 )
 
 # ======================================================
-# Theme / background (warm for entry, cool for analysis)
+# Theme / background
 # ======================================================
 page_bg = "#FFF9E6" if page == "Data Entry & Records Page" else "#EAF4FF"
 
@@ -36,10 +36,7 @@ st.markdown(
         --soft-bg: {"var(--entry-soft)" if page == "Data Entry & Records Page" else "var(--analysis-soft)"};
       }}
 
-      .block-container {{
-        padding-top: 1.0rem;
-        padding-bottom: 2.0rem;
-      }}
+      .block-container {{ padding-top: 1.0rem; padding-bottom: 2.0rem; }}
 
       .hero {{
         border: 1px solid var(--border-soft);
@@ -48,16 +45,8 @@ st.markdown(
         padding: 16px 18px;
         margin-bottom: 12px;
       }}
-      .hero-title {{
-        font-size: 28px;
-        font-weight: 800;
-        margin: 0;
-      }}
-      .hero-sub {{
-        margin-top: 6px;
-        color: var(--muted);
-        font-size: 14px;
-      }}
+      .hero-title {{ font-size: 28px; font-weight: 800; margin: 0; }}
+      .hero-sub {{ margin-top: 6px; color: var(--muted); font-size: 14px; }}
 
       .card {{
         border: 1px solid var(--border-soft);
@@ -91,9 +80,7 @@ st.markdown(
         font-size: 13px !important;
         background-color: var(--soft-bg) !important;
       }}
-      tbody tr:nth-child(even) {{
-        background-color: rgba(0,0,0,0.02);
-      }}
+      tbody tr:nth-child(even) {{ background-color: rgba(0,0,0,0.02); }}
     </style>
     """,
     unsafe_allow_html=True
@@ -104,7 +91,7 @@ st.markdown(
     <div class="hero">
       <div class="hero-title">ECMO Trend Analyzer</div>
       <div class="hero-sub">
-        Backfillable date/time • r = Delta P / Flow • Daily-first (last 7 days) trend • RPM–Flow coupling • Correlations • CSV restore
+        r = Delta P / Flow • Daily-first (last 7 days) trend • RPM–Flow coupling • Correlations • CSV restore
       </div>
     </div>
     """,
@@ -115,20 +102,19 @@ st.markdown(
 # Data schema helpers
 # ======================================================
 COLUMNS = [
-    "No",
-    "RecordedAt",
-    "Flow", "RPM", "DeltaP", "Hb",
-    "Glucose_mmol", "Glucose_mg_dL",
-    "r",
-    "RPM_per_Flow",
+    "No", "RecordedAt",
+    "Flow", "RPM", "DeltaP",
+    "Hb", "Glucose_mmol",
+    "Glucose_mg_dL",
+    "r", "RPM_per_Flow"
 ]
 
 def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or len(df) == 0:
         return pd.DataFrame(columns=COLUMNS)
-    for col in COLUMNS:
-        if col not in df.columns:
-            df[col] = pd.NA
+    for c in COLUMNS:
+        if c not in df.columns:
+            df[c] = pd.NA
     df["No"] = pd.to_numeric(df["No"], errors="coerce")
     return df[COLUMNS].copy()
 
@@ -235,7 +221,6 @@ if page == "Data Entry & Records Page":
 
     uploaded = st.file_uploader("Upload CSV", type=["csv"], key="restore_csv")
 
-    # Restore ONCE for a selected file, then rerun once (prevents infinite loop)
     if uploaded is not None and not st.session_state.restore_done:
         with st.spinner("Restoring..."):
             try:
@@ -312,7 +297,6 @@ if page == "Data Entry & Records Page":
                             pass
                         st.info(f"Total records: {len(st.session_state.data)}")
 
-    # ---- Export ----
     st.markdown(
         """
         <div class="card">
@@ -341,44 +325,39 @@ else:
         st.info("Not enough valid datetime records. Please fix RecordedAt on page 1.")
         st.stop()
 
-    # ---------- Daily-first (last 7 days) ----------
+    # ✅ Fix A: clear all matplotlib figures to prevent stale y-axis caching
+    plt.close("all")
+
+    # ---------- Daily-first last 7 days ----------
     df["date"] = df["RecordedAt_dt"].dt.date
-    daily_first = df.groupby("date", as_index=False).first()  # first record of each day
-    daily_first = daily_first.sort_values("date").reset_index(drop=True)
+    daily_first = df.groupby("date", as_index=False).first().sort_values("date").reset_index(drop=True)
     last7 = daily_first.tail(7).copy()
 
     def pct_change(prev, curr):
-        if prev is None or curr is None:
-            return None
         if prev == 0:
             return None
         return (curr - prev) / abs(prev) * 100.0
 
-    # Add day-to-day pct change based on daily-first
     last7["DeltaP_pct"] = None
     last7["r_pct"] = None
     for i in range(len(last7)):
         if i == 0:
-            last7.loc[last7.index[i], "DeltaP_pct"] = None
-            last7.loc[last7.index[i], "r_pct"] = None
-        else:
-            dp_prev = float(last7.loc[last7.index[i-1], "DeltaP"])
-            dp_cur  = float(last7.loc[last7.index[i], "DeltaP"])
-            r_prev  = float(last7.loc[last7.index[i-1], "r"])
-            r_cur   = float(last7.loc[last7.index[i], "r"])
-            last7.loc[last7.index[i], "DeltaP_pct"] = pct_change(dp_prev, dp_cur)
-            last7.loc[last7.index[i], "r_pct"] = pct_change(r_prev, r_cur)
+            continue
+        dp_prev = float(last7.loc[last7.index[i-1], "DeltaP"])
+        dp_cur = float(last7.loc[last7.index[i], "DeltaP"])
+        r_prev = float(last7.loc[last7.index[i-1], "r"])
+        r_cur = float(last7.loc[last7.index[i], "r"])
+        last7.loc[last7.index[i], "DeltaP_pct"] = pct_change(dp_prev, dp_cur) if dp_prev != 0 else None
+        last7.loc[last7.index[i], "r_pct"] = pct_change(r_prev, r_cur) if r_prev != 0 else None
 
-    # KPI: current from last7 daily-first
-    current_dp = int(last7["DeltaP"].iloc[-1])
-    current_r  = float(last7["r"].iloc[-1])
+    cur_dp = int(last7["DeltaP"].iloc[-1])
+    cur_r = float(last7["r"].iloc[-1])
 
     dp_trend = last7["DeltaP_pct"].iloc[-1]
-    r_trend  = last7["r_pct"].iloc[-1]
-    dp_delta_str = "—" if pd.isna(dp_trend) or dp_trend is None else f"{dp_trend:+.1f}%"
-    r_delta_str  = "—" if pd.isna(r_trend)  or r_trend  is None else f"{r_trend:+.1f}%"
+    r_trend = last7["r_pct"].iloc[-1]
+    dp_delta_str = "—" if dp_trend is None or pd.isna(dp_trend) else f"{dp_trend:+.1f}%"
+    r_delta_str = "—" if r_trend is None or pd.isna(r_trend) else f"{r_trend:+.1f}%"
 
-    # Day #
     d0 = daily_first["date"].iloc[0]
     d1 = daily_first["date"].iloc[-1]
     day_no = (d1 - d0).days + 1
@@ -386,42 +365,28 @@ else:
     st.markdown(
         """
         <div class="card">
-          <h3>📌 Current Status (based on Daily-First)</h3>
-          <p>Trend % compares <b>today's first record</b> vs <b>yesterday's first record</b> within the last 7 days.</p>
+          <h3>📌 Current Status (Daily-first)</h3>
+          <p>Trend% compares today's first record vs yesterday's first record (within the last 7 days).</p>
         </div>
         """,
         unsafe_allow_html=True
     )
 
-    k1, k2, k3 = st.columns(3)
-    k1.metric("Current Delta P (mmHg)", f"{current_dp}", dp_delta_str)
-    k2.metric("Current r (ΔP / Flow)", f"{current_r:.2f}", r_delta_str)
-    k3.metric("Day # (Day 1 = earliest record)", f"{day_no}")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Current Delta P (mmHg)", f"{cur_dp}", dp_delta_str)
+    c2.metric("Current r (ΔP / Flow)", f"{cur_r:.2f}", r_delta_str)
+    c3.metric("Day # (Day 1 = earliest record)", f"{day_no}")
 
-    # Show last 7 daily-first table with % change
     show7 = last7[["date", "DeltaP", "DeltaP_pct", "r", "r_pct"]].copy()
-    show7["DeltaP_pct"] = show7["DeltaP_pct"].map(lambda x: "—" if pd.isna(x) or x is None else f"{x:+.1f}%")
-    show7["r_pct"] = show7["r_pct"].map(lambda x: "—" if pd.isna(x) or x is None else f"{x:+.1f}%")
+    show7["DeltaP_pct"] = show7["DeltaP_pct"].map(lambda x: "—" if x is None or pd.isna(x) else f"{x:+.1f}%")
+    show7["r_pct"] = show7["r_pct"].map(lambda x: "—" if x is None or pd.isna(x) else f"{x:+.1f}%")
 
-    st.markdown(
-        """
-        <div class="card">
-          <h3>🗓️ Last 7 Days (Daily First Record)</h3>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+    st.markdown("<div class='card'><h3>🗓️ Last 7 Days (Daily First)</h3></div>", unsafe_allow_html=True)
     st.dataframe(show7, use_container_width=True, hide_index=True)
 
-    # ---------- Smoothing for daily-first series ----------
+    # ---------- Smoothing (dynamic window) ----------
     n = len(last7)
-    if n <= 5:
-        win = 1
-    elif n <= 10:
-        win = 2
-    else:
-        win = 3
-
+    win = 1 if n <= 5 else 2 if n <= 10 else 3
     last7["DeltaP_smooth"] = pd.to_numeric(last7["DeltaP"], errors="coerce").rolling(window=win, min_periods=1).mean()
     last7["r_smooth"] = pd.to_numeric(last7["r"], errors="coerce").rolling(window=win, min_periods=1).mean()
 
@@ -429,25 +394,19 @@ else:
         s = pd.to_numeric(series, errors="coerce").dropna()
         if len(s) == 0:
             return "N=0"
-        return (
-            f"Mean {fmt.format(s.mean())} | "
-            f"Max {fmt.format(s.max())} | "
-            f"Min {fmt.format(s.min())} | "
-            f"Median {fmt.format(s.median())} | "
-            f"N={len(s)}"
-        )
+        return f"Mean {fmt.format(s.mean())} | Max {fmt.format(s.max())} | Min {fmt.format(s.min())} | Median {fmt.format(s.median())} | N={len(s)}"
 
     st.markdown(
         f"""
         <div class="card">
-          <h3>📈 Trends (Daily-First) — Raw + Smoothed</h3>
-          <p>Raw (dashed) + Smoothed (solid). Smoothing window = <b>{win}</b>. Y-axis: ΔP 0–50, r 0–30.</p>
+          <h3>📈 Trends (Daily-first): Raw + Smoothed</h3>
+          <p>Y-axis fixed: ΔP 0–50 mmHg, r 0–30. Smoothed window = {win}.</p>
         </div>
         """,
         unsafe_allow_html=True
     )
 
-    # ---------- Delta P trend (0-50) ----------
+    # ---------- Delta P plot (0-50) ----------
     fig, ax = plt.subplots()
     ax.plot(last7["date"], last7["DeltaP"], linestyle="--", alpha=0.35, label="Raw (daily first)")
     ax.plot(last7["date"], last7["DeltaP_smooth"], marker="o", label=f"Smoothed (window={win})")
@@ -459,7 +418,7 @@ else:
     st.pyplot(fig, clear_figure=True)
     st.caption(stats_text(last7["DeltaP"], "{:.1f}"))
 
-    # ---------- r trend (0-30) ----------
+    # ---------- r plot (0-30) ----------
     fig, ax = plt.subplots()
     ax.plot(last7["date"], last7["r"], linestyle="--", alpha=0.35, label="Raw (daily first)")
     ax.plot(last7["date"], last7["r_smooth"], marker="o", label=f"Smoothed (window={win})")
@@ -471,41 +430,31 @@ else:
     st.pyplot(fig, clear_figure=True)
     st.caption(stats_text(last7["r"], "{:.2f}"))
 
-    # ---------- RPM vs Flow (color = r) with fixed colorbar 0-30, cyan->red ----------
+    # ---------- RPM vs Flow (color=r, fixed 0-30 cyan->red) ----------
     st.markdown(
         """
         <div class="card">
-          <h3>🔎 RPM–Flow Coupling (Color-coded by r)</h3>
-          <p>Colorbar fixed 0–30 (cyan → red) for consistent interpretation.</p>
+          <h3>🔎 RPM vs Flow (Color = r)</h3>
+          <p>Colorbar fixed 0–30 for consistent interpretation (cool → warm).</p>
         </div>
         """,
         unsafe_allow_html=True
     )
 
     fig, ax = plt.subplots()
-    sc = ax.scatter(
-        df["RPM"], df["Flow"],
-        c=df["r"],
-        cmap="coolwarm",   # cool (cyan/blue) -> warm (red)
-        vmin=0, vmax=30
-    )
-    ax.set_xlabel("Pump RPM")
-    ax.set_ylabel("ECMO Flow (L/min)")
+    sc = ax.scatter(df["RPM"], df["Flow"], c=df["r"], cmap="coolwarm", vmin=0, vmax=30)
+    ax.set_xlabel("RPM")
+    ax.set_ylabel("Flow (L/min)")
     ax.set_title("RPM vs Flow (Color = r)")
     cbar = plt.colorbar(sc, ax=ax)
     cbar.set_label("r (ΔP / Flow)")
     cbar.set_ticks([0, 5, 10, 15, 20, 25, 30])
     st.pyplot(fig, clear_figure=True)
 
+    st.info("High r with rising RPM but limited Flow suggests increased circuit resistance.")
+
     # ---------- Correlation ----------
-    st.markdown(
-        """
-        <div class="card">
-          <h3>🧪 Correlation Analysis (r vs Hb, r vs Glucose)</h3>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+    st.markdown("<div class='card'><h3>🧪 Correlation Analysis</h3></div>", unsafe_allow_html=True)
 
     def corr_block(x, y, x_name, y_name):
         d = pd.DataFrame({"x": x, "y": y}).dropna()
@@ -518,5 +467,5 @@ else:
         st.write(f"- Pearson r = {pr:.3f}, p = {pp:.4g}")
         st.write(f"- Spearman ρ = {sr:.3f}, p = {sp:.4g}")
 
-    corr_block(df["Hb"], df["r"], "Hemoglobin (g/dL)", "r")
+    corr_block(df["Hb"], df["r"], "Hb (g/dL)", "r")
     corr_block(df["Glucose_mmol"], df["r"], "Glucose (mmol/L)", "r")

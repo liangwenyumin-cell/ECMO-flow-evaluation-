@@ -7,7 +7,7 @@ from scipy.stats import pearsonr, spearmanr
 st.set_page_config(page_title="ECMO Trend Analyzer", layout="wide")
 st.title("ECMO Trend Analyzer")
 st.caption(
-    "Backfillable date/time • r = Delta P / Flow • Trend plots • Correlation (r vs Hb, r vs Glucose)"
+    "Backfillable date/time • r = Delta P / Flow • Trends • RPM–Flow coupling (colored by r) • Correlations"
 )
 
 # -------------------------
@@ -17,7 +17,8 @@ COLUMNS = [
     "RecordedAt",
     "Flow", "RPM", "DeltaP", "Hb",
     "Glucose_mmol", "Glucose_mg_dL",
-    "r"
+    "r",
+    "RPM_per_Flow",  # pump inefficiency index
 ]
 
 if "data" not in st.session_state:
@@ -45,17 +46,17 @@ with st.form("input_form", clear_on_submit=False):
         "Pump RPM", min_value=0, value=3200, step=10
     )
 
-    # ✅ Delta P: integer
+    # Delta P as integer (machine-read)
     delta_p = c3.number_input(
         "Delta P (mmHg)", min_value=0, value=55, step=1, format="%d"
     )
 
-    # ✅ Hb: 1 decimal
+    # Hb: 1 decimal
     hb = c4.number_input(
         "Hemoglobin (g/dL)", min_value=0.0, value=10.8, step=0.1, format="%.1f"
     )
 
-    # ✅ Glucose: 1 decimal (mmol/L)
+    # Glucose: 1 decimal (mmol/L)
     glucose_mmol = c5.number_input(
         "Glucose (mmol/L)", min_value=0.0, value=8.0, step=0.1, format="%.1f"
     )
@@ -69,18 +70,20 @@ def compute_r(delta_p_val: float, flow_val: float) -> float:
     return delta_p_val / flow_val
 
 if add:
-    glucose_mg_dl = glucose_mmol * 18.0
-    r_val = compute_r(delta_p, flow)
+    glucose_mg_dl = float(glucose_mmol) * 18.0
+    r_val = compute_r(float(delta_p), float(flow))
+    rpm_per_flow = float(rpm) / float(flow)
 
     new_row = {
         "RecordedAt": recorded_at.isoformat(timespec="minutes"),
         "Flow": float(flow),
         "RPM": int(rpm),
-        "DeltaP": int(delta_p),          # keep integer
+        "DeltaP": int(delta_p),
         "Hb": float(hb),
         "Glucose_mmol": float(glucose_mmol),
         "Glucose_mg_dL": float(glucose_mg_dl),
         "r": float(r_val),
+        "RPM_per_Flow": float(rpm_per_flow),
     }
 
     st.session_state.data = pd.concat(
@@ -114,23 +117,28 @@ show_df["RecordedAt"] = pd.to_datetime(
     show_df["RecordedAt"], errors="coerce"
 ).dt.strftime("%Y-%m-%d %H:%M")
 
+# Display formatting
 show_df["DeltaP"] = show_df["DeltaP"].astype(int)
 show_df["Hb"] = show_df["Hb"].map(lambda x: f"{x:.1f}")
 show_df["Glucose_mmol"] = show_df["Glucose_mmol"].map(lambda x: f"{x:.1f}")
 show_df["r"] = show_df["r"].map(lambda x: f"{x:.4f}")
+show_df["RPM_per_Flow"] = show_df["RPM_per_Flow"].map(lambda x: f"{x:.2f}")
 
 st.dataframe(show_df, use_container_width=True)
+
+# -------------------------
+# Prep for plots
+# -------------------------
+plot_df = df.copy()
+plot_df["RecordedAt_dt"] = pd.to_datetime(plot_df["RecordedAt"], errors="coerce")
+plot_df = plot_df.dropna(subset=["RecordedAt_dt"]).sort_values("RecordedAt_dt")
 
 # -------------------------
 # Trend plots
 # -------------------------
 st.subheader("Trends (X-axis: Time)")
 
-plot_df = df.copy()
-plot_df["RecordedAt_dt"] = pd.to_datetime(plot_df["RecordedAt"], errors="coerce")
-plot_df = plot_df.dropna(subset=["RecordedAt_dt"]).sort_values("RecordedAt_dt")
-
-p1, p2 = st.columns(2)
+p1, p2, p3 = st.columns(3)
 
 with p1:
     fig, ax = plt.subplots()
@@ -150,16 +158,54 @@ with p2:
     fig.autofmt_xdate()
     st.pyplot(fig, clear_figure=True)
 
+with p3:
+    fig, ax = plt.subplots()
+    ax.plot(plot_df["RecordedAt_dt"], plot_df["RPM_per_Flow"], marker="o")
+    ax.set_xlabel("Time")
+    ax.set_ylabel("RPM / Flow")
+    ax.set_title("RPM / Flow Trend Over Time")
+    fig.autofmt_xdate()
+    st.pyplot(fig, clear_figure=True)
+
 # -------------------------
-# Correlation
+# RPM–Flow coupling (colored by r)
 # -------------------------
-st.subheader("Correlation Analysis")
+st.subheader("RPM–Flow Coupling (Color-coded by r)")
+
+fig, ax = plt.subplots()
+sc = ax.scatter(
+    df["RPM"],
+    df["Flow"],
+    c=df["r"],
+    cmap="viridis"
+)
+ax.set_xlabel("Pump RPM")
+ax.set_ylabel("ECMO Flow (L/min)")
+ax.set_title("RPM vs Flow (Color = r = Delta P / Flow)")
+cbar = plt.colorbar(sc, ax=ax)
+cbar.set_label("r (Delta P / Flow)")
+st.pyplot(fig, clear_figure=True)
+
+st.markdown(
+"""
+**Interpretation**
+
+- Under normal conditions, increasing RPM results in proportional increases in Flow.
+- When this coupling weakens (RPM ↑ but Flow ↑ minimally), an elevated **r (ΔP / Flow)** suggests increased circuit resistance.
+- **RPM / Flow** reflects pump inefficiency and complements r from a pump-centered perspective.
+"""
+)
+
+# -------------------------
+# Correlation analysis
+# -------------------------
+st.subheader("Correlation Analysis (r vs Hb, r vs Glucose)")
 
 def corr_block(x: pd.Series, y: pd.Series, x_name: str, y_name: str):
     d = pd.DataFrame({"x": x, "y": y}).dropna()
     n = len(d)
     if n < 3:
-        st.warning(f"Not enough data for correlation: {y_name} vs {x_name} (n={n})")
+        st.warning(f"Not enough data for correlation: {y_name} vs {x_name} (n={n}). Add more records.")
         return
 
     pr, pp = pearsonr(d["x"], d["y"])

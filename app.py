@@ -20,15 +20,16 @@ page = st.radio(
 # -------------------------
 page_bg = "#FFF9E6" if page == "Data Entry & Records Page" else "#EAF4FF"  # light yellow / light blue
 
+# -------------------------
+# UI Theme (same palette per page)
+# -------------------------
 st.markdown(
     f"""
     <style>
-      /* Page background */
       .stApp {{
         background-color: {page_bg};
       }}
 
-      /* Color tokens */
       :root {{
         --entry-card: rgba(255, 245, 210, 0.95);
         --entry-soft: rgba(255, 250, 230, 0.95);
@@ -94,7 +95,7 @@ st.markdown(
         border-radius: 14px !important;
       }}
 
-      /* Inputs */
+      /* Inputs (bigger for iPad) */
       label {{
         font-size: 16px !important;
       }}
@@ -115,7 +116,7 @@ st.markdown(
         border: 1px solid var(--border-soft) !important;
       }}
 
-      /* Data editor/table */
+      /* Table header */
       thead tr th {{
         font-size: 13px !important;
         background-color: var(--soft-bg) !important;
@@ -174,8 +175,11 @@ def next_no(df: pd.DataFrame) -> int:
 # -------------------------
 if "data" not in st.session_state:
     st.session_state.data = pd.DataFrame(columns=COLUMNS)
-
 st.session_state.data = ensure_schema(st.session_state.data)
+
+# Guard flag to prevent infinite rerun on restore
+if "restore_done" not in st.session_state:
+    st.session_state.restore_done = False
 
 # ======================================================
 # PAGE 1: Data Entry & Records
@@ -268,24 +272,34 @@ if page == "Data Entry & Records Page":
         unsafe_allow_html=True
     )
 
-    uploaded = st.file_uploader("Upload CSV", type=["csv"])
-    if uploaded is not None:
+    uploaded = st.file_uploader("Upload CSV", type=["csv"], key="restore_csv")
+
+    # IMPORTANT: only restore once per selected file to avoid infinite rerun
+    if uploaded is not None and not st.session_state.restore_done:
         with st.spinner("Restoring..."):
             try:
                 loaded = pd.read_csv(uploaded)
                 st.session_state.data = ensure_schema(loaded)
+
+                st.session_state.restore_done = True  # prevents rerun loop
+
                 st.success(f"✅ Restored {len(st.session_state.data)} records.")
                 try:
                     st.toast("Restored from CSV.", icon="✅")
                 except Exception:
                     pass
 
-                # ✅ Key fix: force a clean rerun so the rest of the page
-                # uses the newly restored data immediately (prevents "missing rows" glitch).
                 st.rerun()
 
             except Exception as e:
                 st.error(f"Failed to load CSV: {e}")
+
+    # Optional: allow restoring another CSV explicitly
+    if st.session_state.restore_done:
+        if st.button("Restore another CSV"):
+            st.session_state.restore_done = False
+            st.session_state["restore_csv"] = None
+            st.rerun()
 
     # ---- Records (Editable) ----
     st.markdown(

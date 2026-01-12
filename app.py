@@ -175,6 +175,7 @@ def next_no(df: pd.DataFrame) -> int:
 # -------------------------
 if "data" not in st.session_state:
     st.session_state.data = pd.DataFrame(columns=COLUMNS)
+
 st.session_state.data = ensure_schema(st.session_state.data)
 
 # Guard flag to prevent infinite rerun on restore
@@ -224,7 +225,6 @@ if page == "Data Entry & Records Page":
 
         add = st.form_submit_button("Add record")
 
-    # ---- Add record with spinner + success ----
     if add:
         if flow <= 0:
             st.error("Flow must be > 0.")
@@ -261,7 +261,6 @@ if page == "Data Entry & Records Page":
 
             st.info(f"Total records: {len(st.session_state.data)} | Latest No: {rec_no}")
 
-    # ---- Restore from CSV (under Add Record) ----
     st.markdown(
         """
         <div class="card">
@@ -274,7 +273,6 @@ if page == "Data Entry & Records Page":
 
     uploaded = st.file_uploader("Upload CSV", type=["csv"], key="restore_csv")
 
-    # IMPORTANT: only restore once per selected file to avoid infinite rerun
     if uploaded is not None and not st.session_state.restore_done:
         with st.spinner("Restoring..."):
             try:
@@ -294,14 +292,12 @@ if page == "Data Entry & Records Page":
             except Exception as e:
                 st.error(f"Failed to load CSV: {e}")
 
-    # Optional: allow restoring another CSV explicitly
     if st.session_state.restore_done:
         if st.button("Restore another CSV"):
             st.session_state.restore_done = False
             st.session_state["restore_csv"] = None
             st.rerun()
 
-    # ---- Records (Editable) ----
     st.markdown(
         """
         <div class="card">
@@ -323,7 +319,6 @@ if page == "Data Entry & Records Page":
 
         st.info("Edits are not saved until you click **Apply changes**.")
 
-        # ---- Apply changes with spinner + success ----
         if st.button("Apply changes"):
             with st.spinner("Applying changes..."):
                 saved = edited.copy()
@@ -355,7 +350,6 @@ if page == "Data Entry & Records Page":
 
                         st.info(f"Total records: {len(st.session_state.data)}")
 
-    # ---- Export ----
     st.markdown(
         """
         <div class="card">
@@ -369,7 +363,7 @@ if page == "Data Entry & Records Page":
     st.download_button("Download CSV", data=csv, file_name="ecmo_trend_data.csv", mime="text/csv")
 
 # ======================================================
-# PAGE 2: Charts & Anysia
+# PAGE 2: Charts & Anysia (UPDATED)
 # ======================================================
 else:
     df = ensure_schema(st.session_state.data)
@@ -377,32 +371,104 @@ else:
         st.info("No data yet.")
         st.stop()
 
+    # Prep time ordering
     df["RecordedAt_dt"] = pd.to_datetime(df["RecordedAt"], errors="coerce")
-    plot_df = df.dropna(subset=["RecordedAt_dt"]).sort_values("RecordedAt_dt")
+    plot_df = df.dropna(subset=["RecordedAt_dt"]).sort_values("RecordedAt_dt").reset_index(drop=True)
 
+    if len(plot_df) == 0:
+        st.warning("All records have invalid datetime. Please correct 'RecordedAt' in the editable table.")
+        st.stop()
+
+    # ---------- KPI helpers ----------
+    def pct_change_last(series: pd.Series):
+        s = pd.to_numeric(series, errors="coerce").dropna()
+        if len(s) < 2:
+            return None
+        last = float(s.iloc[-1])
+        prev = float(s.iloc[-2])
+        if prev == 0:
+            return None
+        return (last - prev) / abs(prev) * 100.0
+
+    def stats_text(series: pd.Series, fmt: str = "{:.2f}"):
+        s = pd.to_numeric(series, errors="coerce").dropna()
+        if len(s) == 0:
+            return "N=0"
+        mean = s.mean()
+        mx = s.max()
+        mn = s.min()
+        med = s.median()
+        n = len(s)
+        return f"Mean {fmt.format(mean)} | Max {fmt.format(mx)} | Min {fmt.format(mn)} | Median {fmt.format(med)} | N={n}"
+
+    # Day count (Day 1 = earliest date)
+    d0 = plot_df["RecordedAt_dt"].iloc[0].date()
+    d1 = plot_df["RecordedAt_dt"].iloc[-1].date()
+    day_no = (d1 - d0).days + 1
+
+    current_dp = int(plot_df["DeltaP"].iloc[-1])
+    current_r = float(plot_df["r"].iloc[-1])
+
+    dp_trend = pct_change_last(plot_df["DeltaP"])
+    r_trend = pct_change_last(plot_df["r"])
+
+    dp_delta_str = "—" if dp_trend is None else f"{dp_trend:+.1f}%"
+    r_delta_str = "—" if r_trend is None else f"{r_trend:+.1f}%"
+
+    # ---------- KPIs ----------
     st.markdown(
         """
         <div class="card">
-          <h3>📈 Trends</h3>
-          <p>Large charts for analysis view.</p>
+          <h3>📌 Current Status</h3>
+          <p>Top-level metrics from the most recent record, with short-term (last-step) trend.</p>
         </div>
         """,
         unsafe_allow_html=True
     )
 
-    for title, y, ylabel in [
-        ("Delta P Trend Over Time", "DeltaP", "Delta P (mmHg)"),
-        ("r Trend Over Time", "r", "r (Delta P / Flow)"),
-        ("RPM / Flow Trend Over Time", "RPM_per_Flow", "RPM / Flow"),
-    ]:
-        fig, ax = plt.subplots()
-        ax.plot(plot_df["RecordedAt_dt"], plot_df[y], marker="o")
-        ax.set_xlabel("Time")
-        ax.set_ylabel(ylabel)
-        ax.set_title(title)
-        fig.autofmt_xdate()
-        st.pyplot(fig, clear_figure=True)
+    k1, k2, k3 = st.columns(3)
+    k1.metric("Current Delta P (mmHg)", f"{current_dp}", dp_delta_str)
+    k2.metric("Current r (ΔP / Flow)", f"{current_r:.2f}", r_delta_str)
+    k3.metric("Day # (Day 1 = earliest record)", f"{day_no}", None)
 
+    st.markdown(
+        """
+        <div class="card">
+          <h3>📈 Trends (Smoothed)</h3>
+          <p>Rolling mean smoothing (window=3) to make the lines less jagged. Fixed y-axis ranges as requested.</p>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # ---------- Smoothing ----------
+    win = 3 if len(plot_df) >= 3 else max(1, len(plot_df))
+    plot_df["DeltaP_smooth"] = pd.to_numeric(plot_df["DeltaP"], errors="coerce").rolling(window=win, min_periods=1).mean()
+    plot_df["r_smooth"] = pd.to_numeric(plot_df["r"], errors="coerce").rolling(window=win, min_periods=1).mean()
+
+    # ---------- Delta P plot (0-100) ----------
+    fig, ax = plt.subplots()
+    ax.plot(plot_df["RecordedAt_dt"], plot_df["DeltaP_smooth"], marker="o")
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Delta P (mmHg)")
+    ax.set_title("Delta P Trend (Smoothed)")
+    ax.set_ylim(0, 100)
+    fig.autofmt_xdate()
+    st.pyplot(fig, clear_figure=True)
+    st.caption(stats_text(plot_df["DeltaP"], fmt="{:.1f}"))
+
+    # ---------- r plot (0-50) ----------
+    fig, ax = plt.subplots()
+    ax.plot(plot_df["RecordedAt_dt"], plot_df["r_smooth"], marker="o")
+    ax.set_xlabel("Time")
+    ax.set_ylabel("r (ΔP / Flow)")
+    ax.set_title("r Trend (Smoothed)")
+    ax.set_ylim(0, 50)
+    fig.autofmt_xdate()
+    st.pyplot(fig, clear_figure=True)
+    st.caption(stats_text(plot_df["r"], fmt="{:.2f}"))
+
+    # ---------- RPM–Flow coupling ----------
     st.markdown(
         """
         <div class="card">
@@ -426,6 +492,7 @@ else:
         "Interpretation: When RPM increases without proportional Flow increase, elevated r suggests increased circuit resistance."
     )
 
+    # ---------- Correlation ----------
     st.markdown(
         """
         <div class="card">
@@ -447,5 +514,5 @@ else:
         st.write(f"- Pearson r = {pr:.3f}, p = {pp:.4g}")
         st.write(f"- Spearman ρ = {sr:.3f}, p = {sp:.4g}")
 
-    corr_block(df["Hb"], df["r"], "Hemoglobin (g/dL)", "r")
-    corr_block(df["Glucose_mmol"], df["r"], "Glucose (mmol/L)", "r")
+    corr_block(plot_df["Hb"], plot_df["r"], "Hemoglobin (g/dL)", "r")
+    corr_block(plot_df["Glucose_mmol"], plot_df["r"], "Glucose (mmol/L)", "r")

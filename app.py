@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from scipy.stats import pearsonr, spearmanr
 
 # ======================================================
@@ -107,7 +107,7 @@ st.markdown(
     <div class="hero">
       <div class="hero-title">ECMO Trend Analyzer</div>
       <div class="hero-sub">
-        r = Delta P / Flow • Daily-first (last 7 days) trend • RPM–Flow coupling • Correlations • CSV restore
+        r = Delta P / Flow • Daily-first summary + All-record trend • RPM–Flow coupling • Correlations • CSV restore
       </div>
     </div>
     """,
@@ -146,7 +146,7 @@ if "data" not in st.session_state:
     st.session_state.data = pd.DataFrame(columns=COLUMNS)
 st.session_state.data = ensure_schema(st.session_state.data)
 
-# Restore loop guard (prevents infinite rerun)
+# Restore loop guard
 if "restore_done" not in st.session_state:
     st.session_state.restore_done = False
 
@@ -224,7 +224,6 @@ if page == "Data Entry & Records Page":
                 pass
             st.info(f"Total records: {len(st.session_state.data)} | Latest No: {rec_no}")
 
-    # ---- Restore from CSV ----
     st.markdown(
         """
         <div class="card">
@@ -260,7 +259,6 @@ if page == "Data Entry & Records Page":
             st.session_state["restore_csv"] = None
             st.rerun()
 
-    # ---- Records (Editable) ----
     st.markdown(
         """
         <div class="card">
@@ -324,7 +322,7 @@ if page == "Data Entry & Records Page":
     st.download_button("Download CSV", data=csv, file_name="ecmo_trend_data.csv", mime="text/csv")
 
 # ======================================================
-# PAGE 2: Charts & Analysis (KPI restored + y-axis locked)
+# PAGE 2: Charts & Analysis (new: All-record trend)
 # ======================================================
 else:
     df = ensure_schema(st.session_state.data)
@@ -339,20 +337,42 @@ else:
         st.info("Not enough valid datetime records. Please fix RecordedAt on page 1.")
         st.stop()
 
-    # ✅ prevent stale matplotlib state
+    # Clear matplotlib state to avoid stale axis
     plt.close("all")
 
-    # ---- daily-first last 7 days ----
+    # ----------------------------
+    # View Mode selector
+    # ----------------------------
+    st.markdown("<div class='card'><h3>View Mode</h3></div>", unsafe_allow_html=True)
+    mode = st.radio(
+        "Choose analysis view",
+        ["All records (trend)", "Daily-first (last 7 days)"],
+        horizontal=True
+    )
+
+    # ----------------------------
+    # helper stats line
+    # ----------------------------
+    def stats_text(series: pd.Series, fmt: str):
+        s = pd.to_numeric(series, errors="coerce").dropna()
+        if len(s) == 0:
+            return "N=0"
+        return f"Mean {fmt.format(s.mean())} | Max {fmt.format(s.max())} | Min {fmt.format(s.min())} | Median {fmt.format(s.median())} | N={len(s)}"
+
+    # ----------------------------
+    # Common KPI (based on daily-first)
+    # ----------------------------
     df["date"] = df["RecordedAt_dt"].dt.date
     daily_first = df.groupby("date", as_index=False).first().sort_values("date").reset_index(drop=True)
-    last7 = daily_first.tail(7).copy()
+    last7_daily = daily_first.tail(7).copy()
 
-    # day number
     d0 = daily_first["date"].iloc[0]
     d1 = daily_first["date"].iloc[-1]
     day_no = (d1 - d0).days + 1
 
-    # trend %: daily-first today vs yesterday
+    cur_dp = int(last7_daily["DeltaP"].iloc[-1])
+    cur_r = float(last7_daily["r"].iloc[-1])
+
     def pct(prev, cur):
         if prev == 0:
             return None
@@ -360,91 +380,126 @@ else:
 
     dp_tr = None
     r_tr = None
-    if len(last7) >= 2:
-        dp_tr = pct(float(last7["DeltaP"].iloc[-2]), float(last7["DeltaP"].iloc[-1]))
-        r_tr = pct(float(last7["r"].iloc[-2]), float(last7["r"].iloc[-1]))
+    if len(last7_daily) >= 2:
+        dp_tr = pct(float(last7_daily["DeltaP"].iloc[-2]), float(last7_daily["DeltaP"].iloc[-1]))
+        r_tr = pct(float(last7_daily["r"].iloc[-2]), float(last7_daily["r"].iloc[-1]))
 
     dp_delta = "—" if dp_tr is None else f"{dp_tr:+.1f}%"
     r_delta = "—" if r_tr is None else f"{r_tr:+.1f}%"
 
-    cur_dp = int(last7["DeltaP"].iloc[-1])
-    cur_r = float(last7["r"].iloc[-1])
-
     st.markdown(
         """
         <div class="card">
-          <h3>📌 Current Status (Daily-first)</h3>
-          <p>Delta% compares today's first record vs yesterday's first record (within last 7 days).</p>
+          <h3>📌 Current Status (Daily-first baseline)</h3>
         </div>
         """,
         unsafe_allow_html=True
     )
-
     k1, k2, k3 = st.columns(3)
     k1.metric("Current Delta P (mmHg)", f"{cur_dp}", dp_delta)
     k2.metric("Current r (ΔP / Flow)", f"{cur_r:.2f}", r_delta)
     k3.metric("Day # (Day 1 = earliest record)", f"{day_no}")
 
-    # 7-day daily-first table with % columns
-    show7 = last7[["date", "DeltaP", "r"]].copy()
-    show7["DeltaP_%"] = "—"
-    show7["r_%"] = "—"
-    for i in range(1, len(show7)):
-        p_dp = pct(float(show7.loc[show7.index[i-1], "DeltaP"]), float(show7.loc[show7.index[i], "DeltaP"]))
-        p_r = pct(float(show7.loc[show7.index[i-1], "r"]), float(show7.loc[show7.index[i], "r"]))
-        show7.loc[show7.index[i], "DeltaP_%"] = "—" if p_dp is None else f"{p_dp:+.1f}%"
-        show7.loc[show7.index[i], "r_%"] = "—" if p_r is None else f"{p_r:+.1f}%"
+    # ----------------------------
+    # Mode A: All records
+    # ----------------------------
+    if mode == "All records (trend)":
+        st.markdown("<div class='card'><h3>All-record Trend</h3><p>Use last N days and smoothing window to make 60+ points readable.</p></div>", unsafe_allow_html=True)
 
-    st.markdown("<div class='card'><h3>🗓️ Last 7 Days (Daily First)</h3></div>", unsafe_allow_html=True)
-    st.dataframe(show7, use_container_width=True, hide_index=True)
+        cA, cB = st.columns(2)
+        with cA:
+            last_n_days = st.slider("Show last N days", min_value=1, max_value=60, value=14)
+        with cB:
+            win = st.slider("Smoothing window (points)", min_value=1, max_value=15, value=3)
 
-    # smoothing (dynamic)
-    n = len(last7)
-    win = 1 if n <= 5 else 2 if n <= 10 else 3
-    last7["dp_s"] = pd.to_numeric(last7["DeltaP"], errors="coerce").rolling(window=win, min_periods=1).mean()
-    last7["r_s"] = pd.to_numeric(last7["r"], errors="coerce").rolling(window=win, min_periods=1).mean()
+        cutoff = df["RecordedAt_dt"].max() - timedelta(days=int(last_n_days))
+        df_view = df[df["RecordedAt_dt"] >= cutoff].copy()
+        if len(df_view) < 2:
+            st.warning("Not enough points in this range. Increase N days.")
+            st.stop()
 
-    def stats_text(series: pd.Series, fmt: str):
-        s = pd.to_numeric(series, errors="coerce").dropna()
-        if len(s) == 0:
-            return "N=0"
-        return f"Mean {fmt.format(s.mean())} | Max {fmt.format(s.max())} | Min {fmt.format(s.min())} | Median {fmt.format(s.median())} | N={len(s)}"
+        df_view["dp_s"] = pd.to_numeric(df_view["DeltaP"], errors="coerce").rolling(window=win, min_periods=1).mean()
+        df_view["r_s"] = pd.to_numeric(df_view["r"], errors="coerce").rolling(window=win, min_periods=1).mean()
 
-    st.markdown(
-        f"""
-        <div class="card">
-          <h3>📈 Trends (Daily-first)</h3>
-          <p>Raw (dashed) + Smoothed (solid). Window={win}. Y-axis locked: ΔP 0–50, r 0–30.</p>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+        # Warn if clipping
+        if df_view["DeltaP"].max() > 50:
+            st.warning("Delta P has values > 50. Plot is clipped at 50 by design.")
+        if df_view["r"].max() > 30:
+            st.warning("r has values > 30. Plot is clipped at 30 by design.")
 
-    # ---- Delta P plot (LOCK 0–50) ----
-    fig, ax = plt.subplots()
-    ax.plot(last7["date"], last7["DeltaP"], linestyle="--", alpha=0.35, label="Raw (daily first)")
-    ax.plot(last7["date"], last7["dp_s"], marker="o", label=f"Smoothed (window={win})")
-    ax.set_ylim(0, 50)  # ✅ LOCK
-    ax.set_xlabel("Date")
-    ax.set_ylabel("Delta P (mmHg)")
-    ax.set_title("Delta P Trend (Daily First)")
-    ax.legend()
-    st.pyplot(fig, clear_figure=True)
-    st.caption(stats_text(last7["DeltaP"], "{:.1f}"))
+        # Delta P plot (0–50)
+        fig, ax = plt.subplots()
+        ax.plot(df_view["RecordedAt_dt"], df_view["DeltaP"], linestyle="--", alpha=0.25, label="Raw")
+        ax.plot(df_view["RecordedAt_dt"], df_view["dp_s"], marker="o", label=f"Smoothed (window={win})")
+        ax.set_ylim(0, 50)
+        ax.set_xlabel("Time")
+        ax.set_ylabel("Delta P (mmHg)")
+        ax.set_title("Delta P Trend (All records)")
+        ax.legend()
+        fig.autofmt_xdate()
+        st.pyplot(fig, clear_figure=True)
+        st.caption(stats_text(df_view["DeltaP"], "{:.1f}"))
 
-    # ---- r plot (LOCK 0–30) ----
-    fig, ax = plt.subplots()
-    ax.plot(last7["date"], last7["r"], linestyle="--", alpha=0.35, label="Raw (daily first)")
-    ax.plot(last7["date"], last7["r_s"], marker="o", label=f"Smoothed (window={win})")
-    ax.set_ylim(0, 30)  # ✅ LOCK
-    ax.set_xlabel("Date")
-    ax.set_ylabel("r (ΔP / Flow)")
-    ax.set_title("r Trend (Daily First)")
-    ax.legend()
-    st.pyplot(fig, clear_figure=True)
-    st.caption(stats_text(last7["r"], "{:.2f}"))
+        # r plot (0–30)
+        fig, ax = plt.subplots()
+        ax.plot(df_view["RecordedAt_dt"], df_view["r"], linestyle="--", alpha=0.25, label="Raw")
+        ax.plot(df_view["RecordedAt_dt"], df_view["r_s"], marker="o", label=f"Smoothed (window={win})")
+        ax.set_ylim(0, 30)
+        ax.set_xlabel("Time")
+        ax.set_ylabel("r (ΔP / Flow)")
+        ax.set_title("r Trend (All records)")
+        ax.legend()
+        fig.autofmt_xdate()
+        st.pyplot(fig, clear_figure=True)
+        st.caption(stats_text(df_view["r"], "{:.2f}"))
 
-    # ---- RPM vs Flow (color=r, fixed 0–30) ----
+    # ----------------------------
+    # Mode B: Daily-first last 7
+    # ----------------------------
+    else:
+        st.markdown("<div class='card'><h3>Daily-first (Last 7 Days)</h3><p>Each day uses the first record of that day.</p></div>", unsafe_allow_html=True)
+
+        show7 = last7_daily[["date", "DeltaP", "r"]].copy()
+        show7["DeltaP_%"] = "—"
+        show7["r_%"] = "—"
+        for i in range(1, len(show7)):
+            p_dp = pct(float(show7.loc[show7.index[i-1], "DeltaP"]), float(show7.loc[show7.index[i], "DeltaP"]))
+            p_r = pct(float(show7.loc[show7.index[i-1], "r"]), float(show7.loc[show7.index[i], "r"]))
+            show7.loc[show7.index[i], "DeltaP_%"] = "—" if p_dp is None else f"{p_dp:+.1f}%"
+            show7.loc[show7.index[i], "r_%"] = "—" if p_r is None else f"{p_r:+.1f}%"
+
+        st.dataframe(show7, use_container_width=True, hide_index=True)
+
+        n = len(last7_daily)
+        win = 1 if n <= 5 else 2 if n <= 10 else 3
+        last7_daily["dp_s"] = pd.to_numeric(last7_daily["DeltaP"], errors="coerce").rolling(window=win, min_periods=1).mean()
+        last7_daily["r_s"] = pd.to_numeric(last7_daily["r"], errors="coerce").rolling(window=win, min_periods=1).mean()
+
+        fig, ax = plt.subplots()
+        ax.plot(last7_daily["date"], last7_daily["DeltaP"], linestyle="--", alpha=0.35, label="Raw (daily first)")
+        ax.plot(last7_daily["date"], last7_daily["dp_s"], marker="o", label=f"Smoothed (window={win})")
+        ax.set_ylim(0, 50)
+        ax.set_xlabel("Date")
+        ax.set_ylabel("Delta P (mmHg)")
+        ax.set_title("Delta P Trend (Daily-first)")
+        ax.legend()
+        st.pyplot(fig, clear_figure=True)
+        st.caption(stats_text(last7_daily["DeltaP"], "{:.1f}"))
+
+        fig, ax = plt.subplots()
+        ax.plot(last7_daily["date"], last7_daily["r"], linestyle="--", alpha=0.35, label="Raw (daily first)")
+        ax.plot(last7_daily["date"], last7_daily["r_s"], marker="o", label=f"Smoothed (window={win})")
+        ax.set_ylim(0, 30)
+        ax.set_xlabel("Date")
+        ax.set_ylabel("r (ΔP / Flow)")
+        ax.set_title("r Trend (Daily-first)")
+        ax.legend()
+        st.pyplot(fig, clear_figure=True)
+        st.caption(stats_text(last7_daily["r"], "{:.2f}"))
+
+    # ----------------------------
+    # RPM vs Flow (color=r fixed)
+    # ----------------------------
     st.markdown("<div class='card'><h3>🔎 RPM vs Flow (Color = r)</h3></div>", unsafe_allow_html=True)
     fig, ax = plt.subplots()
     sc = ax.scatter(df["RPM"], df["Flow"], c=df["r"], cmap="coolwarm", vmin=0, vmax=30)
@@ -456,9 +511,9 @@ else:
     cbar.set_ticks([0, 5, 10, 15, 20, 25, 30])
     st.pyplot(fig, clear_figure=True)
 
-    st.info("High r with rising RPM but limited Flow suggests increased circuit resistance.")
-
-    # ---- Correlation ----
+    # ----------------------------
+    # Correlation
+    # ----------------------------
     st.markdown("<div class='card'><h3>🧪 Correlation</h3></div>", unsafe_allow_html=True)
 
     def corr_block(x, y, x_name, y_name):
@@ -473,4 +528,4 @@ else:
         st.write(f"- Spearman ρ = {sr:.3f}, p = {sp:.4g}")
 
     corr_block(df["Hb"], df["r"], "Hb (g/dL)", "r")
-    corr_block(df["Glucose_mmol"], df["r"], "Glucose (mmol/L)", "r")
+    corr_block(df["Glucose_mmol"], df["r"], "Glucose (mmol/L)", "r")用

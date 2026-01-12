@@ -528,4 +528,4 @@ else:
         st.write(f"- Spearman ρ = {sr:.3f}, p = {sp:.4g}")
 
     corr_block(df["Hb"], df["r"], "Hb (g/dL)", "r")
-    corr_block(df["Glucose_mmol"], df["r"], "Glucose (mmol/L)", "r")用
+    corr_block(df["Glucose_mmol"], df["r"], "Glucose (mmol/L)", "r")

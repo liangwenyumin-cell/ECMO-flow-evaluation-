@@ -3,11 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from datetime import datetime
 from scipy.stats import pearsonr, spearmanr
-import uuid
 
-# -------------------------
-# Page config + simple UI CSS
-# -------------------------
 st.set_page_config(page_title="ECMO Trend Analyzer", layout="wide")
 
 st.markdown(
@@ -40,7 +36,7 @@ st.markdown(
 # Data schema
 # -------------------------
 COLUMNS = [
-    "ID",
+    "No",                 # simple incremental number
     "RecordedAt",
     "Flow", "RPM", "DeltaP", "Hb",
     "Glucose_mmol", "Glucose_mg_dL",
@@ -49,7 +45,6 @@ COLUMNS = [
 ]
 
 def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
-    """Ensure all expected columns exist; create ID if missing."""
     if df is None or len(df) == 0:
         return pd.DataFrame(columns=COLUMNS)
 
@@ -57,12 +52,20 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         if col not in df.columns:
             df[col] = pd.NA
 
-    # Create IDs if missing
-    if df["ID"].isna().any() or (df["ID"].astype(str).str.len() == 0).any():
-        df["ID"] = df["ID"].apply(lambda x: x if pd.notna(x) and str(x).strip() else str(uuid.uuid4())[:8])
+    # Ensure numeric "No" if possible
+    df["No"] = pd.to_numeric(df["No"], errors="coerce")
 
     # Keep only columns we need, in order
     return df[COLUMNS].copy()
+
+def next_no(df: pd.DataFrame) -> int:
+    """Return next record number (monotonic)."""
+    if df is None or len(df) == 0:
+        return 1
+    s = pd.to_numeric(df["No"], errors="coerce").dropna()
+    if len(s) == 0:
+        return 1
+    return int(s.max()) + 1
 
 # -------------------------
 # Session state
@@ -73,16 +76,20 @@ if "data" not in st.session_state:
 st.session_state.data = ensure_schema(st.session_state.data)
 
 # -------------------------
-# Page selector (2nd page for charts)
+# Page selector (renamed)
 # -------------------------
-page = st.radio("Page", ["Data Entry & Records", "Charts & Analysis"], horizontal=True)
+page = st.radio(
+    "Page",
+    ["Data Entry & Records Page", "Charts & Anysia Page"],
+    horizontal=True
+)
 
 # =========================
-# PAGE 1: Data entry + records
+# PAGE 1
 # =========================
-if page == "Data Entry & Records":
+if page == "Data Entry & Records Page":
 
-    # ---- CSV Restore (Option A) ----
+    # ---- CSV Restore ----
     st.subheader("Data Persistence (CSV Restore)")
     st.caption("To prevent data loss after refresh/closing the tab: download CSV regularly and restore via CSV upload.")
     uploaded = st.file_uploader("Restore from CSV", type=["csv"])
@@ -91,7 +98,6 @@ if page == "Data Entry & Records":
             loaded = pd.read_csv(uploaded)
             loaded = ensure_schema(loaded)
 
-            # Basic sanity: must have key columns
             required_cols = {"RecordedAt", "Flow", "RPM", "DeltaP", "Hb", "Glucose_mmol", "r"}
             if not required_cols.issubset(set(loaded.columns)):
                 st.error("CSV format mismatch. Please upload a CSV exported from this app.")
@@ -103,7 +109,7 @@ if page == "Data Entry & Records":
 
     st.divider()
 
-    # ---- Data Entry (Vertical, bigger) ----
+    # ---- Data Entry (vertical) ----
     st.subheader("Add Record (Backfillable)")
 
     with st.form("input_form", clear_on_submit=False):
@@ -114,13 +120,8 @@ if page == "Data Entry & Records":
         flow = st.number_input("ECMO Flow (L/min)", min_value=0.1, value=4.5, step=0.1)
         rpm = st.number_input("Pump RPM", min_value=0, value=3200, step=10)
 
-        # Delta P integer
         delta_p = st.number_input("Delta P (mmHg)", min_value=0, value=55, step=1, format="%d")
-
-        # Hb 1 decimal
         hb = st.number_input("Hemoglobin (g/dL)", min_value=0.0, value=10.8, step=0.1, format="%.1f")
-
-        # Glucose 1 decimal mmol/L
         glucose_mmol = st.number_input("Glucose (mmol/L)", min_value=0.0, value=8.0, step=0.1, format="%.1f")
 
         add = st.form_submit_button("Add record")
@@ -129,12 +130,15 @@ if page == "Data Entry & Records":
         return dp / fl
 
     if add:
+        df_current = ensure_schema(st.session_state.data)
+        rec_no = next_no(df_current)
+
         glucose_mg_dl = float(glucose_mmol) * 18.0
         r_val = compute_r(float(delta_p), float(flow))
         rpm_per_flow = float(rpm) / float(flow)
 
         new_row = {
-            "ID": str(uuid.uuid4())[:8],
+            "No": rec_no,
             "RecordedAt": recorded_at.isoformat(timespec="minutes"),
             "Flow": float(flow),
             "RPM": int(rpm),
@@ -147,7 +151,7 @@ if page == "Data Entry & Records":
         }
 
         st.session_state.data = pd.concat(
-            [st.session_state.data, pd.DataFrame([new_row])],
+            [df_current, pd.DataFrame([new_row])],
             ignore_index=True
         )
 
@@ -160,11 +164,9 @@ if page == "Data Entry & Records":
 
     # ---- Editable records table ----
     st.subheader("Records (Editable)")
-    st.caption("Edit values directly below, then click **Save changes**. IDs are hidden but used for safe delete/restore.")
+    st.caption("Edit values directly below, then click **Save changes**. Record No is used for safe delete/restore.")
 
     df = ensure_schema(st.session_state.data)
-
-    # Show friendly time for display (but keep original in data)
     df_display = df.copy()
     df_display["RecordedAt"] = pd.to_datetime(df_display["RecordedAt"], errors="coerce").dt.strftime("%Y-%m-%d %H:%M")
 
@@ -173,7 +175,7 @@ if page == "Data Entry & Records":
         use_container_width=True,
         hide_index=True,
         column_config={
-            "ID": st.column_config.TextColumn("ID", disabled=True, help="Internal record key"),
+            "No": st.column_config.NumberColumn("No", disabled=True, help="Record number"),
             "RecordedAt": st.column_config.TextColumn("RecordedAt (YYYY-MM-DD HH:MM)", help="Backfilled time of record"),
             "DeltaP": st.column_config.NumberColumn("DeltaP (mmHg)", step=1, format="%d"),
             "Hb": st.column_config.NumberColumn("Hb (g/dL)", step=0.1, format="%.1f"),
@@ -181,36 +183,33 @@ if page == "Data Entry & Records":
         }
     )
 
-    # Save changes button (explicit, avoids accidental edits)
     if st.button("Save changes"):
         try:
-            # Convert back: RecordedAt text -> ISO string
             saved = edited.copy()
 
-            # Attempt to parse displayed RecordedAt into ISO minutes
             parsed = pd.to_datetime(saved["RecordedAt"], errors="coerce")
             if parsed.isna().any():
                 st.error("Some RecordedAt values could not be parsed. Use format YYYY-MM-DD HH:MM.")
             else:
                 saved["RecordedAt"] = parsed.dt.strftime("%Y-%m-%dT%H:%M")
 
-                # Enforce types / recompute derived fields (r, glucose_mg_dL, rpm_per_flow)
                 saved["Flow"] = pd.to_numeric(saved["Flow"], errors="coerce")
                 saved["RPM"] = pd.to_numeric(saved["RPM"], errors="coerce")
                 saved["DeltaP"] = pd.to_numeric(saved["DeltaP"], errors="coerce").round(0).astype("Int64")
                 saved["Hb"] = pd.to_numeric(saved["Hb"], errors="coerce")
                 saved["Glucose_mmol"] = pd.to_numeric(saved["Glucose_mmol"], errors="coerce")
+                saved["No"] = pd.to_numeric(saved["No"], errors="coerce")
 
-                # Recompute derived columns safely
+                # Recompute derived columns
                 saved["Glucose_mg_dL"] = saved["Glucose_mmol"] * 18.0
                 saved["r"] = saved["DeltaP"].astype(float) / saved["Flow"].astype(float)
                 saved["RPM_per_Flow"] = saved["RPM"].astype(float) / saved["Flow"].astype(float)
 
-                # Keep schema + drop rows with missing essentials
                 saved = ensure_schema(saved)
-                essentials = ["RecordedAt", "Flow", "RPM", "DeltaP"]
+
+                essentials = ["No", "RecordedAt", "Flow", "RPM", "DeltaP"]
                 if saved[essentials].isna().any().any():
-                    st.error("Some required fields are missing after edit (RecordedAt/Flow/RPM/DeltaP). Please fix and save again.")
+                    st.error("Some required fields are missing after edit (No/RecordedAt/Flow/RPM/DeltaP). Please fix and save again.")
                 else:
                     st.session_state.data = saved
                     st.success("Changes saved.")
@@ -224,26 +223,26 @@ if page == "Data Entry & Records":
     df_now = ensure_schema(st.session_state.data).copy()
     df_now["RecordedAt_disp"] = pd.to_datetime(df_now["RecordedAt"], errors="coerce").dt.strftime("%Y-%m-%d %H:%M")
 
-    # A readable selector: time + ID + key values
-    options = df_now.apply(
-        lambda r: f'{r["RecordedAt_disp"]} | ID={r["ID"]} | Flow={r["Flow"]} | RPM={r["RPM"]} | ΔP={r["DeltaP"]}',
-        axis=1
-    ).tolist()
-
-    if len(options) == 0:
+    if len(df_now) == 0:
         st.info("No records to delete.")
     else:
+        df_now_sorted = df_now.sort_values("No")
+        options = df_now_sorted.apply(
+            lambda r: f'No={int(r["No"])} | {r["RecordedAt_disp"]} | Flow={r["Flow"]} | RPM={int(r["RPM"])} | ΔP={int(r["DeltaP"])}',
+            axis=1
+        ).tolist()
+
         sel = st.selectbox("Select a record to delete", options)
         sel_idx = options.index(sel)
-        sel_id = df_now.iloc[sel_idx]["ID"]
+        sel_no = int(df_now_sorted.iloc[sel_idx]["No"])
 
         confirm = st.checkbox("Yes, I want to delete this record", value=False)
         if st.button("Delete selected record"):
             if not confirm:
                 st.warning("Please confirm deletion by ticking the checkbox.")
             else:
-                st.session_state.data = df_now[df_now["ID"] != sel_id].drop(columns=["RecordedAt_disp"], errors="ignore").reset_index(drop=True)
-                st.success("Record deleted.")
+                st.session_state.data = df_now_sorted[df_now_sorted["No"] != sel_no].drop(columns=["RecordedAt_disp"], errors="ignore").reset_index(drop=True)
+                st.success(f"Record No {sel_no} deleted.")
 
     st.divider()
 
@@ -254,22 +253,20 @@ if page == "Data Entry & Records":
 
 
 # =========================
-# PAGE 2: Charts + analysis (bigger)
+# PAGE 2
 # =========================
 else:
     df = ensure_schema(st.session_state.data).copy()
 
     if len(df) == 0:
-        st.info("No data yet. Go to 'Data Entry & Records' to add records.")
+        st.info("No data yet. Go to 'Data Entry & Records Page' to add records.")
         st.stop()
 
-    # Prep time ordering
     df["RecordedAt_dt"] = pd.to_datetime(df["RecordedAt"], errors="coerce")
     plot_df = df.dropna(subset=["RecordedAt_dt"]).sort_values("RecordedAt_dt")
 
     st.subheader("Trends (X-axis: Time)")
 
-    # One large chart per row (bigger)
     fig, ax = plt.subplots()
     ax.plot(plot_df["RecordedAt_dt"], plot_df["DeltaP"], marker="o")
     ax.set_xlabel("Time")

@@ -4,23 +4,22 @@ import matplotlib.pyplot as plt
 from datetime import datetime, time, timedelta
 
 # ======================================================
-# Page config + selector
+# Page config
 # ======================================================
 st.set_page_config(page_title="ECMO Trend Analyzer", layout="wide")
 
-# ---------- Page + ICU mode state ----------
+# ======================================================
+# Page + ICU mode state (card buttons)
+# ======================================================
 if "page" not in st.session_state:
     st.session_state.page = "Data Entry & Records Page"
-
 if "icu_mode" not in st.session_state:
     st.session_state.icu_mode = False
 
 def go(page_name: str):
     st.session_state.page = page_name
 
-# ---------- Card-style page switcher ----------
 c1, c2, c3 = st.columns([2, 2, 2])
-
 with c1:
     st.button("📝 Data Entry", use_container_width=True, on_click=go, args=("Data Entry & Records Page",))
 with c2:
@@ -31,51 +30,74 @@ with c3:
 page = st.session_state.page
 
 # ======================================================
-# Background + simple UI
+# Background + UI
 # ======================================================
 page_bg = "#FFF9E6" if page == "Data Entry & Records Page" else "#EAF4FF"
 
 st.markdown(
     f"""
     <style>
-/* ---------- ICU MODE TUNING ---------- */
-:root {
-  --icu-font: 18px;
-  --icu-title: 30px;
-  --icu-card-pad: 18px;
-  --icu-border: 2px;
-}
+      /* ---------- ICU MODE TUNING ---------- */
+      :root {{
+        --icu-font: 18px;
+        --icu-title: 30px;
+        --icu-card-pad: 18px;
+        --icu-border: 2px;
+      }}
 
-body[data-icu="1"] {
-  font-size: var(--icu-font) !important;
-}
+      body[data-icu="1"] {{
+        font-size: var(--icu-font) !important;
+      }}
 
-body[data-icu="1"] .hero-title {
-  font-size: var(--icu-title) !important;
-}
+      body[data-icu="1"] .hero-title {{
+        font-size: var(--icu-title) !important;
+      }}
 
-body[data-icu="1"] .card {
-  padding: var(--icu-card-pad) !important;
-  border-width: var(--icu-border) !important;
-}
+      body[data-icu="1"] .card {{
+        padding: var(--icu-card-pad) !important;
+        border-width: var(--icu-border) !important;
+      }}
 
-body[data-icu="1"] label {
-  font-size: 18px !important;
-}
+      body[data-icu="1"] label {{
+        font-size: 18px !important;
+      }}
 
-body[data-icu="1"] .stNumberInput input,
-body[data-icu="1"] .stDateInput input,
-body[data-icu="1"] .stTimeInput input {
-  font-size: 22px !important;
-  padding: 10px 12px !important;
-}
+      body[data-icu="1"] .stNumberInput input,
+      body[data-icu="1"] .stDateInput input,
+      body[data-icu="1"] .stTimeInput input {{
+        font-size: 22px !important;
+        padding: 10px 12px !important;
+      }}
 
-body[data-icu="1"] .stButton button {
-  font-size: 20px !important;
-  padding: 14px 16px !important;
-}
-    
-      .stApp {{ background-color: {page_bg}; }}
+      body[data-icu="1"] .stButton button,
+      body[data-icu="1"] .stDownloadButton button {{
+        font-size: 20px !important;
+        padding: 14px 16px !important;
+      }}
+
+      /* ---------- BASE UI ---------- */
+      .stApp {{
+        background-color: {page_bg};
+      }}
+
+      .hero {{
+        border: 1px solid rgba(0,0,0,0.08);
+        background: rgba(255,255,255,0.85);
+        border-radius: 18px;
+        padding: 16px 18px;
+        margin: 10px 0 12px 0;
+      }}
+      .hero-title {{
+        font-size: 28px;
+        font-weight: 800;
+        margin: 0;
+      }}
+      .hero-sub {{
+        margin-top: 6px;
+        color: rgba(0,0,0,0.55);
+        font-size: 14px;
+      }}
+
       .card {{
         border: 1px solid rgba(0,0,0,0.08);
         background: rgba(255,255,255,0.92);
@@ -83,27 +105,39 @@ body[data-icu="1"] .stButton button {
         padding: 14px;
         margin: 10px 0 12px 0;
       }}
-      .hero {{
-        border: 1px solid rgba(0,0,0,0.08);
-        background: rgba(255,255,255,0.85);
-        border-radius: 18px;
-        padding: 16px 18px;
-        margin-bottom: 12px;
+
+      label {{
+        font-size: 16px !important;
       }}
-      .hero-title {{ font-size: 28px; font-weight: 800; margin: 0; }}
-      .hero-sub {{ margin-top: 6px; color: rgba(0,0,0,0.55); font-size: 14px; }}
-      label {{ font-size: 16px !important; }}
+
       .stNumberInput input, .stDateInput input, .stTimeInput input {{
-        font-size: 18px !important; background-color: #fff !important;
+        font-size: 18px !important;
+        background-color: #fff !important;
       }}
+
       .stButton button, .stDownloadButton button {{
         font-size: 16px !important;
         padding: 10px 14px !important;
         border-radius: 12px !important;
       }}
-      thead tr th {{ font-size: 13px !important; }}
-      tbody tr:nth-child(even) {{ background-color: rgba(0,0,0,0.02); }}
+
+      thead tr th {{
+        font-size: 13px !important;
+      }}
+      tbody tr:nth-child(even) {{
+        background-color: rgba(0,0,0,0.02);
+      }}
     </style>
+    """,
+    unsafe_allow_html=True
+)
+
+# Make ICU mode toggle actually apply
+st.markdown(
+    f"""
+    <script>
+      document.body.setAttribute("data-icu", "{1 if st.session_state.icu_mode else 0}");
+    </script>
     """,
     unsafe_allow_html=True
 )
@@ -137,10 +171,12 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or len(df) == 0:
         return pd.DataFrame(columns=COLUMNS)
 
+    # add missing cols
     for c in COLUMNS:
         if c not in df.columns:
             df[c] = pd.NA
 
+    # numeric base
     df["No"] = _to_num(df["No"])
     if df["No"].isna().all():
         df["No"] = range(1, len(df) + 1)
@@ -150,6 +186,7 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     df["DeltaP"] = _to_num(df["DeltaP"]).round(0)
     df["Hb"] = _to_num(df["Hb"])
 
+    # recompute derived
     valid_flow = df["Flow"] > 0
     df.loc[valid_flow, "r"] = df.loc[valid_flow, "DeltaP"] / df.loc[valid_flow, "Flow"]
     df.loc[valid_flow, "RPM_per_Flow"] = df.loc[valid_flow, "RPM"] / df.loc[valid_flow, "Flow"]
@@ -176,7 +213,7 @@ if "restore_done" not in st.session_state:
     st.session_state.restore_done = False
 
 # ======================================================
-# PAGE 1: Data Entry & Records
+# PAGE 1
 # ======================================================
 if page == "Data Entry & Records Page":
 
@@ -312,7 +349,7 @@ if page == "Data Entry & Records Page":
     st.download_button("Download CSV", data=csv, file_name="ecmo_trend_data.csv", mime="text/csv")
 
 # ======================================================
-# PAGE 2: Charts & Analysis
+# PAGE 2
 # ======================================================
 else:
     df = ensure_schema(st.session_state.data)
@@ -406,11 +443,11 @@ else:
     df_view = df[df["RecordedAt_dt"] >= cutoff].copy()
 
     if use_daily_first_only:
-        df_view = df_view.copy()
-        df_view["date"] = df_view["RecordedAt_dt"].dt.date
-        df_view = df_view.groupby("date", as_index=False).first()
-        df_view["RecordedAt_dt"] = pd.to_datetime(df_view["RecordedAt_dt"])
-        df_view = df_view.sort_values("RecordedAt_dt")
+        tmp = df_view.copy()
+        tmp["date"] = tmp["RecordedAt_dt"].dt.date
+        tmp = tmp.groupby("date", as_index=False).first()
+        tmp["RecordedAt_dt"] = pd.to_datetime(tmp["RecordedAt_dt"])
+        df_view = tmp.sort_values("RecordedAt_dt")
 
     if len(df_view) < 2:
         st.warning("Not enough points in this range. Increase N days.")
@@ -438,7 +475,7 @@ else:
     st.pyplot(fig, clear_figure=True)
     st.caption(stats_text(df_view["r"], "{:.2f}"))
 
-    # r/Hb (auto)
+    # r/Hb
     fig, ax = plt.subplots()
     ax.plot(df_view["RecordedAt_dt"], df_view["r_hb"], marker="o")
     ax.set_title("r/Hb Trend")
@@ -448,7 +485,7 @@ else:
     st.pyplot(fig, clear_figure=True)
     st.caption(stats_text(df_view["r_hb"], "{:.3f}"))
 
-    # RPM/Flow (auto)
+    # RPM/Flow
     fig, ax = plt.subplots()
     ax.plot(df_view["RecordedAt_dt"], df_view["RPM_per_Flow"], marker="o")
     ax.set_title("RPM / Flow Trend")
@@ -488,12 +525,12 @@ else:
         "RPM/Flow": "RPM_per_Flow"
     }
 
-    c1, c2, c3 = st.columns([2, 2, 2])
-    with c1:
+    s1, s2, s3 = st.columns([2, 2, 2])
+    with s1:
         x_label = st.selectbox("X axis", list(var_map.keys()), index=1)
-    with c2:
+    with s2:
         y_label = st.selectbox("Y axis", list(var_map.keys()), index=3)
-    with c3:
+    with s3:
         show_line = st.checkbox("Show linear trend line", value=True)
 
     x_col = var_map[x_label]
@@ -515,7 +552,6 @@ else:
         ax.set_title(f"{y_label} vs {x_label}")
 
         if show_line:
-            # simple linear fit without numpy: slope = cov/var
             x = pair[x_col].astype(float)
             y = pair[y_col].astype(float)
             x_mean = x.mean()
@@ -525,7 +561,6 @@ else:
                 cov_xy = ((x - x_mean) * (y - y_mean)).mean()
                 slope = cov_xy / var_x
                 intercept = y_mean - slope * x_mean
-
                 xs = pd.Series([x.min(), x.max()])
                 ys = slope * xs + intercept
                 ax.plot(xs, ys)

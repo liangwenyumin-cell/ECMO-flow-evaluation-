@@ -37,47 +37,48 @@ page_bg = "#FFF9E6" if page == "Data Entry & Records Page" else "#EAF4FF"
 st.markdown(
     f"""
     <style>
-      /* ---------- ICU MODE TUNING ---------- */
-      :root {{
-        --icu-font: 18px;
-        --icu-title: 30px;
-        --icu-card-pad: 18px;
-        --icu-border: 2px;
-      }}
-
-      body[data-icu="1"] {{
-        font-size: var(--icu-font) !important;
-      }}
-
-      body[data-icu="1"] .hero-title {{
-        font-size: var(--icu-title) !important;
-      }}
-
-      body[data-icu="1"] .card {{
-        padding: var(--icu-card-pad) !important;
-        border-width: var(--icu-border) !important;
-      }}
-
-      body[data-icu="1"] label {{
+      /* ---------- ICU MODE TUNING (applies to .stApp) ---------- */
+      .stApp[data-icu="1"] {{
         font-size: 18px !important;
       }}
 
-      body[data-icu="1"] .stNumberInput input,
-      body[data-icu="1"] .stDateInput input,
-      body[data-icu="1"] .stTimeInput input {{
-        font-size: 22px !important;
-        padding: 10px 12px !important;
+      .stApp[data-icu="1"] .hero-title {{
+        font-size: 32px !important;
       }}
 
-      body[data-icu="1"] .stButton button,
-      body[data-icu="1"] .stDownloadButton button {{
+      .stApp[data-icu="1"] .card {{
+        padding: 22px !important;
+        border-width: 2px !important;
+      }}
+
+      .stApp[data-icu="1"] label {{
         font-size: 20px !important;
-        padding: 14px 16px !important;
+      }}
+
+      .stApp[data-icu="1"] .stNumberInput input,
+      .stApp[data-icu="1"] .stDateInput input,
+      .stApp[data-icu="1"] .stTimeInput input {{
+        font-size: 24px !important;
+        padding: 12px 14px !important;
+      }}
+
+      .stApp[data-icu="1"] .stButton button,
+      .stApp[data-icu="1"] .stDownloadButton button {{
+        font-size: 22px !important;
+        padding: 16px 18px !important;
       }}
 
       /* ---------- BASE UI ---------- */
       .stApp {{
         background-color: {page_bg};
+      }}
+
+      .card {{
+        border: 1px solid rgba(0,0,0,0.08);
+        background: rgba(255,255,255,0.92);
+        border-radius: 16px;
+        padding: 14px;
+        margin: 10px 0 12px 0;
       }}
 
       .hero {{
@@ -96,14 +97,6 @@ st.markdown(
         margin-top: 6px;
         color: rgba(0,0,0,0.55);
         font-size: 14px;
-      }}
-
-      .card {{
-        border: 1px solid rgba(0,0,0,0.08);
-        background: rgba(255,255,255,0.92);
-        border-radius: 16px;
-        padding: 14px;
-        margin: 10px 0 12px 0;
       }}
 
       label {{
@@ -132,11 +125,14 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# Make ICU mode toggle actually apply
+# ✅ ICU mode: set attribute on .stApp (not body)
 st.markdown(
     f"""
     <script>
-      document.body.setAttribute("data-icu", "{1 if st.session_state.icu_mode else 0}");
+      const app = document.querySelector('.stApp');
+      if (app) {{
+        app.setAttribute('data-icu', '{1 if st.session_state.icu_mode else 0}');
+      }}
     </script>
     """,
     unsafe_allow_html=True
@@ -171,12 +167,10 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or len(df) == 0:
         return pd.DataFrame(columns=COLUMNS)
 
-    # add missing cols
     for c in COLUMNS:
         if c not in df.columns:
             df[c] = pd.NA
 
-    # numeric base
     df["No"] = _to_num(df["No"])
     if df["No"].isna().all():
         df["No"] = range(1, len(df) + 1)
@@ -186,7 +180,6 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     df["DeltaP"] = _to_num(df["DeltaP"]).round(0)
     df["Hb"] = _to_num(df["Hb"])
 
-    # recompute derived
     valid_flow = df["Flow"] > 0
     df.loc[valid_flow, "r"] = df.loc[valid_flow, "DeltaP"] / df.loc[valid_flow, "Flow"]
     df.loc[valid_flow, "RPM_per_Flow"] = df.loc[valid_flow, "RPM"] / df.loc[valid_flow, "Flow"]
@@ -496,25 +489,26 @@ else:
     st.caption(stats_text(df_view["RPM_per_Flow"], "{:.2f}"))
 
     # ----------------------------
-    # Correlation investigation (Pearson + Spearman)
+    # Correlation (Pearson + Spearman WITHOUT scipy)
+    # Spearman = Pearson of ranks
     # ----------------------------
-    st.markdown("<div class='card'><h3>🔎 Correlation Investigation</h3><p>Pearson & Spearman correlation matrices for ΔP, r, r/Hb, RPM/Flow.</p></div>", unsafe_allow_html=True)
+    st.markdown("<div class='card'><h3>🔎 Correlation Investigation</h3><p>Pearson & Spearman (rank-based) for ΔP, r, r/Hb, RPM/Flow.</p></div>", unsafe_allow_html=True)
 
     corr_df = df_view[["DeltaP", "r", "r_hb", "RPM_per_Flow"]].apply(pd.to_numeric, errors="coerce").dropna()
     if len(corr_df) < 3:
         st.warning("Not enough complete rows for correlation (need ≥ 3).")
     else:
         pear = corr_df.corr(method="pearson").round(3)
-        spear = corr_df.corr(method="spearman").round(3)
+        spear = corr_df.rank().corr(method="pearson").round(3)  # ✅ no scipy
 
         st.subheader("Pearson correlation")
         st.dataframe(pear, use_container_width=True)
 
-        st.subheader("Spearman correlation")
+        st.subheader("Spearman correlation (rank-based)")
         st.dataframe(spear, use_container_width=True)
 
     # ----------------------------
-    # Scatter selector (X/Y) + Pearson/Spearman for the selected pair
+    # Scatter selector (X/Y) + Pearson/Spearman (rank-based) for selected pair
     # ----------------------------
     st.markdown("<div class='card'><h3>🎯 Scatter Selector</h3><p>Select X and Y to visualize relationship + show Pearson/Spearman.</p></div>", unsafe_allow_html=True)
 
@@ -541,9 +535,9 @@ else:
         st.warning("Not enough points for scatter/correlation (need ≥ 3).")
     else:
         pear_xy = pair[x_col].corr(pair[y_col], method="pearson")
-        spear_xy = pair[x_col].corr(pair[y_col], method="spearman")
+        spear_xy = pair[x_col].rank().corr(pair[y_col].rank(), method="pearson")  # ✅ no scipy
 
-        st.write(f"**Pearson:** {pear_xy:.3f}   |   **Spearman:** {spear_xy:.3f}   |   **N:** {len(pair)}")
+        st.write(f"**Pearson:** {pear_xy:.3f}   |   **Spearman (rank):** {spear_xy:.3f}   |   **N:** {len(pair)}")
 
         fig, ax = plt.subplots()
         ax.scatter(pair[x_col], pair[y_col])

@@ -93,7 +93,7 @@ st.markdown(
     <div class="hero">
       <div class="hero-title">ECMO Trend Analyzer</div>
       <div class="hero-sub">
-        r = Delta P / Flow • r/Hb (Delta P / Flow / Hb) • RPM/Flow • All-record trend + Daily-first (last 7 days) • CSV restore
+        r = ΔP / Flow • r/Hb = (ΔP/Flow)/Hb • RPM/Flow • All-record trend + Daily-first (last 7 days) • CSV restore
       </div>
     </div>
     """,
@@ -101,7 +101,7 @@ st.markdown(
 )
 
 # ======================================================
-# Data schema helpers (Glucose removed)
+# Schema (Glucose removed)
 # ======================================================
 COLUMNS = [
     "No", "RecordedAt",
@@ -109,13 +109,48 @@ COLUMNS = [
     "r", "r_hb", "RPM_per_Flow"
 ]
 
+BASE_COLS = ["RecordedAt", "Flow", "RPM", "DeltaP", "Hb"]
+
+def _to_num(s):
+    return pd.to_numeric(s, errors="coerce")
+
 def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Make old CSV compatible:
+    - Ensure required columns exist
+    - Coerce numeric columns
+    - Recompute derived columns r, r_hb, RPM_per_Flow whenever possible
+    """
     if df is None or len(df) == 0:
         return pd.DataFrame(columns=COLUMNS)
+
+    # Add missing columns
     for c in COLUMNS:
         if c not in df.columns:
             df[c] = pd.NA
-    df["No"] = pd.to_numeric(df["No"], errors="coerce")
+
+    # Coerce numeric types for base columns
+    df["Flow"] = _to_num(df["Flow"])
+    df["RPM"] = _to_num(df["RPM"])
+    df["DeltaP"] = _to_num(df["DeltaP"]).round(0)
+    df["Hb"] = _to_num(df["Hb"])
+
+    # Ensure No exists and is integer-ish
+    df["No"] = _to_num(df["No"])
+    if df["No"].isna().all():
+        # if old CSV had no No, assign sequential
+        df["No"] = range(1, len(df) + 1)
+
+    # Recompute derived columns safely
+    valid_flow = df["Flow"] > 0
+    df.loc[valid_flow, "r"] = df.loc[valid_flow, "DeltaP"] / df.loc[valid_flow, "Flow"]
+    df.loc[valid_flow, "RPM_per_Flow"] = df.loc[valid_flow, "RPM"] / df.loc[valid_flow, "Flow"]
+
+    valid_hb = df["Hb"] > 0
+    valid_rhb = valid_flow & valid_hb
+    df.loc[valid_rhb, "r_hb"] = df.loc[valid_rhb, "r"] / df.loc[valid_rhb, "Hb"]
+
+    # Keep only our columns (order)
     return df[COLUMNS].copy()
 
 def next_no(df: pd.DataFrame) -> int:
@@ -134,7 +169,7 @@ if "restore_done" not in st.session_state:
     st.session_state.restore_done = False
 
 # ======================================================
-# PAGE 1: Data Entry & Records
+# PAGE 1
 # ======================================================
 if page == "Data Entry & Records Page":
 
@@ -151,12 +186,10 @@ if page == "Data Entry & Records Page":
     df_now = ensure_schema(st.session_state.data)
     if len(df_now) > 0 and df_now["No"].dropna().any():
         last = df_now.sort_values("No").iloc[-1]
-        def pick(val, fallback):
-            return fallback if pd.isna(val) else val
-        d_flow = float(pick(last.get("Flow"), 4.5))
-        d_rpm  = int(pick(last.get("RPM"), 3200))
-        d_dp   = int(pick(last.get("DeltaP"), 40))
-        d_hb   = float(pick(last.get("Hb"), 10.0))
+        d_flow = float(last["Flow"]) if pd.notna(last["Flow"]) else 4.5
+        d_rpm  = int(last["RPM"]) if pd.notna(last["RPM"]) else 3200
+        d_dp   = int(last["DeltaP"]) if pd.notna(last["DeltaP"]) else 40
+        d_hb   = float(last["Hb"]) if pd.notna(last["Hb"]) else 10.0
     else:
         d_flow, d_rpm, d_dp, d_hb = 4.5, 3200, 40, 10.0
 
@@ -199,16 +232,17 @@ if page == "Data Entry & Records Page":
                 }
 
                 st.session_state.data = pd.concat([df_now, pd.DataFrame([new_row])], ignore_index=True)
+                st.session_state.data = ensure_schema(st.session_state.data)
 
             st.success("✅ Saved successfully.")
             st.info(f"Total records: {len(st.session_state.data)} | Latest No: {rec_no}")
 
-    # ---- Restore from CSV ----
+    # ---- Restore ----
     st.markdown(
         """
         <div class="card">
           <h3>💾 Restore from CSV</h3>
-          <p>Upload a CSV exported from this app. (Prevents data loss after refresh/close.)</p>
+          <p>Upload a CSV exported from this app.</p>
         </div>
         """,
         unsafe_allow_html=True
@@ -233,12 +267,12 @@ if page == "Data Entry & Records Page":
             st.session_state["restore_csv"] = None
             st.rerun()
 
-    # ---- Records (Editable) ----
+    # ---- Records ----
     st.markdown(
         """
         <div class="card">
-          <h3>🧾 Records (Editable)</h3>
-          <p>Edit cells and click <b>Apply changes</b>. Derived metrics (r, r/Hb, RPM/Flow) will be recalculated.</p>
+          <h3>🧾 Records</h3>
+          <p>Edit data directly. (Derived columns will be recomputed automatically after Apply.)</p>
         </div>
         """,
         unsafe_allow_html=True
@@ -250,7 +284,6 @@ if page == "Data Entry & Records Page":
     else:
         df_disp = df.copy()
         df_disp["RecordedAt"] = pd.to_datetime(df_disp["RecordedAt"], errors="coerce").dt.strftime("%Y-%m-%d %H:%M")
-
         edited = st.data_editor(df_disp, use_container_width=True, hide_index=True)
         st.info("Edits are not saved until you click **Apply changes**.")
 
@@ -261,53 +294,31 @@ if page == "Data Entry & Records Page":
                 if parsed.isna().any():
                     st.error("Invalid datetime format. Use YYYY-MM-DD HH:MM.")
                 else:
+                    # Write back ISO format
                     saved["RecordedAt"] = parsed.dt.strftime("%Y-%m-%dT%H:%M")
-                    saved["Flow"] = pd.to_numeric(saved["Flow"], errors="coerce")
-                    saved["RPM"] = pd.to_numeric(saved["RPM"], errors="coerce")
-                    saved["DeltaP"] = pd.to_numeric(saved["DeltaP"], errors="coerce").round(0).astype("Int64")
-                    saved["Hb"] = pd.to_numeric(saved["Hb"], errors="coerce")
+                    st.session_state.data = ensure_schema(saved)
+                    st.success("✅ Changes applied successfully.")
+                    st.info(f"Total records: {len(st.session_state.data)}")
 
-                    if (saved["Flow"] <= 0).any():
-                        st.error("Flow must be > 0 for all rows.")
-                    elif (saved["Hb"] <= 0).any():
-                        st.error("Hb must be > 0 for all rows.")
-                    else:
-                        saved["r"] = saved["DeltaP"].astype(float) / saved["Flow"].astype(float)
-                        saved["r_hb"] = saved["r"].astype(float) / saved["Hb"].astype(float)
-                        saved["RPM_per_Flow"] = saved["RPM"].astype(float) / saved["Flow"].astype(float)
-
-                        st.session_state.data = ensure_schema(saved)
-
-                        st.success("✅ Changes applied successfully.")
-                        st.info(f"Total records: {len(st.session_state.data)}")
-
-    # ---- Export ----
-    st.markdown(
-        """
-        <div class="card">
-          <h3>⬇️ Export</h3>
-          <p>Download CSV regularly to avoid data loss.</p>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+    # Export
+    st.markdown("<div class='card'><h3>⬇️ Export</h3></div>", unsafe_allow_html=True)
     csv = ensure_schema(st.session_state.data).to_csv(index=False).encode("utf-8")
     st.download_button("Download CSV", data=csv, file_name="ecmo_trend_data.csv", mime="text/csv")
 
 # ======================================================
-# PAGE 2: Charts & Analysis
+# PAGE 2
 # ======================================================
 else:
     df = ensure_schema(st.session_state.data)
     if len(df) < 2:
-        st.info("Not enough data yet. Add more records first.")
+        st.info("Not enough data yet.")
         st.stop()
 
     df["RecordedAt_dt"] = pd.to_datetime(df["RecordedAt"], errors="coerce")
     df = df.dropna(subset=["RecordedAt_dt"]).sort_values("RecordedAt_dt").reset_index(drop=True)
 
     if len(df) < 2:
-        st.info("Not enough valid datetime records. Please fix RecordedAt on page 1.")
+        st.info("Not enough valid datetime records.")
         st.stop()
 
     plt.close("all")
@@ -319,38 +330,20 @@ else:
         horizontal=True
     )
 
-    # Common helper
     def stats_text(series: pd.Series, fmt: str):
         s = pd.to_numeric(series, errors="coerce").dropna()
         if len(s) == 0:
             return "N=0"
         return f"Mean {fmt.format(s.mean())} | Max {fmt.format(s.max())} | Min {fmt.format(s.min())} | Median {fmt.format(s.median())} | N={len(s)}"
 
-    # KPI baseline uses daily-first
     df["date"] = df["RecordedAt_dt"].dt.date
     daily_first = df.groupby("date", as_index=False).first().sort_values("date").reset_index(drop=True)
     last7_daily = daily_first.tail(7).copy()
 
+    # KPI
     d0 = daily_first["date"].iloc[0]
     d1 = daily_first["date"].iloc[-1]
     day_no = (d1 - d0).days + 1
-
-    def pct(prev, cur):
-        if prev == 0:
-            return None
-        return (cur - prev) / abs(prev) * 100.0
-
-    dp_tr = None
-    r_tr = None
-    rhb_tr = None
-    if len(last7_daily) >= 2:
-        dp_tr = pct(float(last7_daily["DeltaP"].iloc[-2]), float(last7_daily["DeltaP"].iloc[-1]))
-        r_tr = pct(float(last7_daily["r"].iloc[-2]), float(last7_daily["r"].iloc[-1]))
-        rhb_tr = pct(float(last7_daily["r_hb"].iloc[-2]), float(last7_daily["r_hb"].iloc[-1]))
-
-    dp_delta = "—" if dp_tr is None else f"{dp_tr:+.1f}%"
-    r_delta = "—" if r_tr is None else f"{r_tr:+.1f}%"
-    rhb_delta = "—" if rhb_tr is None else f"{rhb_tr:+.1f}%"
 
     cur_dp = int(last7_daily["DeltaP"].iloc[-1])
     cur_r = float(last7_daily["r"].iloc[-1])
@@ -358,16 +351,13 @@ else:
 
     st.markdown("<div class='card'><h3>📌 Current Status (Daily-first baseline)</h3></div>", unsafe_allow_html=True)
     k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Current Delta P (mmHg)", f"{cur_dp}", dp_delta)
-    k2.metric("Current r (ΔP / Flow)", f"{cur_r:.2f}", r_delta)
-    k3.metric("Current r/Hb (ΔP/Flow/Hb)", f"{cur_rhb:.3f}", rhb_delta)
-    k4.metric("Day # (Day 1 = earliest record)", f"{day_no}")
+    k1.metric("Current ΔP (mmHg)", f"{cur_dp}")
+    k2.metric("Current r", f"{cur_r:.2f}")
+    k3.metric("Current r/Hb", f"{cur_rhb:.3f}")
+    k4.metric("Day #", f"{day_no}")
 
-    # ----------------------------
-    # Mode A: All records
-    # ----------------------------
     if mode == "All records (trend)":
-        st.markdown("<div class='card'><h3>All-record Trend</h3><p>Use last N days and smoothing window to make many points readable.</p></div>", unsafe_allow_html=True)
+        st.markdown("<div class='card'><h3>All-record Trend</h3></div>", unsafe_allow_html=True)
 
         cA, cB = st.columns(2)
         with cA:
@@ -381,136 +371,121 @@ else:
             st.warning("Not enough points in this range. Increase N days.")
             st.stop()
 
-        df_view["dp_s"] = pd.to_numeric(df_view["DeltaP"], errors="coerce").rolling(window=win, min_periods=1).mean()
-        df_view["r_s"] = pd.to_numeric(df_view["r"], errors="coerce").rolling(window=win, min_periods=1).mean()
-        df_view["rhb_s"] = pd.to_numeric(df_view["r_hb"], errors="coerce").rolling(window=win, min_periods=1).mean()
-        df_view["rpmflow_s"] = pd.to_numeric(df_view["RPM_per_Flow"], errors="coerce").rolling(window=win, min_periods=1).mean()
+        df_view["dp_s"] = df_view["DeltaP"].rolling(win, min_periods=1).mean()
+        df_view["r_s"] = df_view["r"].rolling(win, min_periods=1).mean()
+        df_view["rhb_s"] = df_view["r_hb"].rolling(win, min_periods=1).mean()
+        df_view["rpmflow_s"] = df_view["RPM_per_Flow"].rolling(win, min_periods=1).mean()
 
-        # Clip warnings
-        if df_view["DeltaP"].max() > 50:
-            st.warning("Delta P has values > 50. Plot is clipped at 50 by design.")
-        if df_view["r"].max() > 30:
-            st.warning("r has values > 30. Plot is clipped at 30 by design.")
-        if df_view["r_hb"].max() > 5:
-            st.warning("r/Hb has values > 5. Plot is clipped at 5 by design.")
-
-        # Delta P (0–50)
+        # ΔP 0–50
         fig, ax = plt.subplots()
-        ax.plot(df_view["RecordedAt_dt"], df_view["DeltaP"], linestyle="--", alpha=0.25, label="Raw")
-        ax.plot(df_view["RecordedAt_dt"], df_view["dp_s"], marker="o", label=f"Smoothed (window={win})")
+        ax.plot(df_view["RecordedAt_dt"], df_view["DeltaP"], "--", alpha=0.25, label="Raw")
+        ax.plot(df_view["RecordedAt_dt"], df_view["dp_s"], "-o", label=f"Smoothed (w={win})")
         ax.set_ylim(0, 50)
+        ax.set_title("Delta P Trend (All records)")
         ax.set_xlabel("Time")
         ax.set_ylabel("Delta P (mmHg)")
-        ax.set_title("Delta P Trend (All records)")
         ax.legend()
         fig.autofmt_xdate()
         st.pyplot(fig, clear_figure=True)
         st.caption(stats_text(df_view["DeltaP"], "{:.1f}"))
 
-        # r (0–30)
+        # r 0–30
         fig, ax = plt.subplots()
-        ax.plot(df_view["RecordedAt_dt"], df_view["r"], linestyle="--", alpha=0.25, label="Raw")
-        ax.plot(df_view["RecordedAt_dt"], df_view["r_s"], marker="o", label=f"Smoothed (window={win})")
+        ax.plot(df_view["RecordedAt_dt"], df_view["r"], "--", alpha=0.25, label="Raw")
+        ax.plot(df_view["RecordedAt_dt"], df_view["r_s"], "-o", label=f"Smoothed (w={win})")
         ax.set_ylim(0, 30)
-        ax.set_xlabel("Time")
-        ax.set_ylabel("r (ΔP / Flow)")
         ax.set_title("r Trend (All records)")
+        ax.set_xlabel("Time")
+        ax.set_ylabel("r (ΔP/Flow)")
         ax.legend()
         fig.autofmt_xdate()
         st.pyplot(fig, clear_figure=True)
         st.caption(stats_text(df_view["r"], "{:.2f}"))
 
-        # r/Hb (default 0–5)
+        # r/Hb (0–5 default)
         fig, ax = plt.subplots()
-        ax.plot(df_view["RecordedAt_dt"], df_view["r_hb"], linestyle="--", alpha=0.25, label="Raw")
-        ax.plot(df_view["RecordedAt_dt"], df_view["rhb_s"], marker="o", label=f"Smoothed (window={win})")
+        ax.plot(df_view["RecordedAt_dt"], df_view["r_hb"], "--", alpha=0.25, label="Raw")
+        ax.plot(df_view["RecordedAt_dt"], df_view["rhb_s"], "-o", label=f"Smoothed (w={win})")
         ax.set_ylim(0, 5)
+        ax.set_title("r/Hb Trend (All records)")
         ax.set_xlabel("Time")
         ax.set_ylabel("r/Hb (ΔP/Flow/Hb)")
-        ax.set_title("r/Hb Trend (All records)")
         ax.legend()
         fig.autofmt_xdate()
         st.pyplot(fig, clear_figure=True)
         st.caption(stats_text(df_view["r_hb"], "{:.3f}"))
 
-        # RPM/Flow (auto y-scale)
+        # RPM/Flow (auto)
         fig, ax = plt.subplots()
-        ax.plot(df_view["RecordedAt_dt"], df_view["RPM_per_Flow"], linestyle="--", alpha=0.25, label="Raw")
-        ax.plot(df_view["RecordedAt_dt"], df_view["rpmflow_s"], marker="o", label=f"Smoothed (window={win})")
+        ax.plot(df_view["RecordedAt_dt"], df_view["RPM_per_Flow"], "--", alpha=0.25, label="Raw")
+        ax.plot(df_view["RecordedAt_dt"], df_view["rpmflow_s"], "-o", label=f"Smoothed (w={win})")
+        ax.set_title("RPM / Flow Trend (All records)")
         ax.set_xlabel("Time")
         ax.set_ylabel("RPM / Flow")
-        ax.set_title("RPM / Flow Trend (All records)")
         ax.legend()
         fig.autofmt_xdate()
         st.pyplot(fig, clear_figure=True)
         st.caption(stats_text(df_view["RPM_per_Flow"], "{:.2f}"))
 
-    # ----------------------------
-    # Mode B: Daily-first last 7
-    # ----------------------------
     else:
-        st.markdown("<div class='card'><h3>Daily-first (Last 7 Days)</h3><p>Each day uses the first record of that day.</p></div>", unsafe_allow_html=True)
-
+        st.markdown("<div class='card'><h3>Daily-first (Last 7 Days)</h3></div>", unsafe_allow_html=True)
         show7 = last7_daily[["date", "DeltaP", "r", "r_hb", "RPM_per_Flow"]].copy()
         st.dataframe(show7, use_container_width=True, hide_index=True)
 
-        n = len(last7_daily)
-        win = 1 if n <= 5 else 2 if n <= 10 else 3
-        last7_daily["dp_s"] = pd.to_numeric(last7_daily["DeltaP"], errors="coerce").rolling(window=win, min_periods=1).mean()
-        last7_daily["r_s"] = pd.to_numeric(last7_daily["r"], errors="coerce").rolling(window=win, min_periods=1).mean()
-        last7_daily["rhb_s"] = pd.to_numeric(last7_daily["r_hb"], errors="coerce").rolling(window=win, min_periods=1).mean()
-        last7_daily["rpmflow_s"] = pd.to_numeric(last7_daily["RPM_per_Flow"], errors="coerce").rolling(window=win, min_periods=1).mean()
+        win = 1 if len(last7_daily) <= 5 else 2 if len(last7_daily) <= 10 else 3
+        last7_daily["dp_s"] = last7_daily["DeltaP"].rolling(win, min_periods=1).mean()
+        last7_daily["r_s"] = last7_daily["r"].rolling(win, min_periods=1).mean()
+        last7_daily["rhb_s"] = last7_daily["r_hb"].rolling(win, min_periods=1).mean()
+        last7_daily["rpmflow_s"] = last7_daily["RPM_per_Flow"].rolling(win, min_periods=1).mean()
 
-        # Delta P (0–50)
+        # ΔP 0–50
         fig, ax = plt.subplots()
-        ax.plot(last7_daily["date"], last7_daily["DeltaP"], linestyle="--", alpha=0.35, label="Raw (daily first)")
-        ax.plot(last7_daily["date"], last7_daily["dp_s"], marker="o", label=f"Smoothed (window={win})")
+        ax.plot(last7_daily["date"], last7_daily["DeltaP"], "--", alpha=0.35, label="Raw")
+        ax.plot(last7_daily["date"], last7_daily["dp_s"], "-o", label=f"Smoothed (w={win})")
         ax.set_ylim(0, 50)
+        ax.set_title("Delta P Trend (Daily-first)")
         ax.set_xlabel("Date")
         ax.set_ylabel("Delta P (mmHg)")
-        ax.set_title("Delta P Trend (Daily-first)")
         ax.legend()
         st.pyplot(fig, clear_figure=True)
         st.caption(stats_text(last7_daily["DeltaP"], "{:.1f}"))
 
-        # r (0–30)
+        # r 0–30
         fig, ax = plt.subplots()
-        ax.plot(last7_daily["date"], last7_daily["r"], linestyle="--", alpha=0.35, label="Raw (daily first)")
-        ax.plot(last7_daily["date"], last7_daily["r_s"], marker="o", label=f"Smoothed (window={win})")
+        ax.plot(last7_daily["date"], last7_daily["r"], "--", alpha=0.35, label="Raw")
+        ax.plot(last7_daily["date"], last7_daily["r_s"], "-o", label=f"Smoothed (w={win})")
         ax.set_ylim(0, 30)
-        ax.set_xlabel("Date")
-        ax.set_ylabel("r (ΔP / Flow)")
         ax.set_title("r Trend (Daily-first)")
+        ax.set_xlabel("Date")
+        ax.set_ylabel("r (ΔP/Flow)")
         ax.legend()
         st.pyplot(fig, clear_figure=True)
         st.caption(stats_text(last7_daily["r"], "{:.2f}"))
 
-        # r/Hb (0–5 default)
+        # r/Hb 0–5
         fig, ax = plt.subplots()
-        ax.plot(last7_daily["date"], last7_daily["r_hb"], linestyle="--", alpha=0.35, label="Raw (daily first)")
-        ax.plot(last7_daily["date"], last7_daily["rhb_s"], marker="o", label=f"Smoothed (window={win})")
+        ax.plot(last7_daily["date"], last7_daily["r_hb"], "--", alpha=0.35, label="Raw")
+        ax.plot(last7_daily["date"], last7_daily["rhb_s"], "-o", label=f"Smoothed (w={win})")
         ax.set_ylim(0, 5)
+        ax.set_title("r/Hb Trend (Daily-first)")
         ax.set_xlabel("Date")
         ax.set_ylabel("r/Hb (ΔP/Flow/Hb)")
-        ax.set_title("r/Hb Trend (Daily-first)")
         ax.legend()
         st.pyplot(fig, clear_figure=True)
         st.caption(stats_text(last7_daily["r_hb"], "{:.3f}"))
 
-        # RPM/Flow (auto)
+        # RPM/Flow
         fig, ax = plt.subplots()
-        ax.plot(last7_daily["date"], last7_daily["RPM_per_Flow"], linestyle="--", alpha=0.35, label="Raw (daily first)")
-        ax.plot(last7_daily["date"], last7_daily["rpmflow_s"], marker="o", label=f"Smoothed (window={win})")
+        ax.plot(last7_daily["date"], last7_daily["RPM_per_Flow"], "--", alpha=0.35, label="Raw")
+        ax.plot(last7_daily["date"], last7_daily["rpmflow_s"], "-o", label=f"Smoothed (w={win})")
+        ax.set_title("RPM / Flow Trend (Daily-first)")
         ax.set_xlabel("Date")
         ax.set_ylabel("RPM / Flow")
-        ax.set_title("RPM / Flow Trend (Daily-first)")
         ax.legend()
         st.pyplot(fig, clear_figure=True)
         st.caption(stats_text(last7_daily["RPM_per_Flow"], "{:.2f}"))
 
-    # ----------------------------
-    # RPM vs Flow (color=r fixed)
-    # ----------------------------
+    # RPM vs Flow (color=r fixed 0–30)
     st.markdown("<div class='card'><h3>🔎 RPM vs Flow (Color = r)</h3></div>", unsafe_allow_html=True)
     fig, ax = plt.subplots()
     sc = ax.scatter(df["RPM"], df["Flow"], c=df["r"], cmap="coolwarm", vmin=0, vmax=30)

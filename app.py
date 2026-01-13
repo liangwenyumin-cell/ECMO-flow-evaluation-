@@ -60,7 +60,7 @@ st.markdown(
     <div class="hero">
       <div class="hero-title">ECMO Trend Analyzer</div>
       <div class="hero-sub">
-        r = ΔP / Flow • r/Hb = (ΔP/Flow)/Hb • RPM/Flow • 7-day daily-first trend • Correlation matrices • CSV restore
+        r = ΔP / Flow • r/Hb = (ΔP/Flow)/Hb • RPM/Flow • 7-day daily-first trend • Correlation matrices + scatter selector • CSV restore
       </div>
     </div>
     """,
@@ -88,7 +88,6 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
         if c not in df.columns:
             df[c] = pd.NA
 
-    # coerce base
     df["No"] = _to_num(df["No"])
     if df["No"].isna().all():
         df["No"] = range(1, len(df) + 1)
@@ -98,7 +97,6 @@ def ensure_schema(df: pd.DataFrame) -> pd.DataFrame:
     df["DeltaP"] = _to_num(df["DeltaP"]).round(0)
     df["Hb"] = _to_num(df["Hb"])
 
-    # recompute derived
     valid_flow = df["Flow"] > 0
     df.loc[valid_flow, "r"] = df.loc[valid_flow, "DeltaP"] / df.loc[valid_flow, "Flow"]
     df.loc[valid_flow, "RPM_per_Flow"] = df.loc[valid_flow, "RPM"] / df.loc[valid_flow, "Flow"]
@@ -271,7 +269,6 @@ else:
 
     df["RecordedAt_dt"] = pd.to_datetime(df["RecordedAt"], errors="coerce")
     df = df.dropna(subset=["RecordedAt_dt"]).sort_values("RecordedAt_dt").reset_index(drop=True)
-
     if len(df) < 2:
         st.info("Not enough valid datetime records.")
         st.stop()
@@ -323,18 +320,22 @@ else:
     show7["r/Hb_%"] = "—"
     show7["RPM/Flow_%"] = "—"
     for i in range(1, len(show7)):
-        show7.loc[show7.index[i], "ΔP_%"] = "—" if pct(float(show7.loc[show7.index[i-1], "DeltaP"]), float(show7.loc[show7.index[i], "DeltaP"])) is None else f"{pct(float(show7.loc[show7.index[i-1], 'DeltaP']), float(show7.loc[show7.index[i], 'DeltaP'])):+.1f}%"
-        show7.loc[show7.index[i], "r_%"] = "—" if pct(float(show7.loc[show7.index[i-1], "r"]), float(show7.loc[show7.index[i], "r"])) is None else f"{pct(float(show7.loc[show7.index[i-1], 'r']), float(show7.loc[show7.index[i], 'r'])):+.1f}%"
-        show7.loc[show7.index[i], "r/Hb_%"] = "—" if pct(float(show7.loc[show7.index[i-1], "r_hb"]), float(show7.loc[show7.index[i], "r_hb"])) is None else f"{pct(float(show7.loc[show7.index[i-1], 'r_hb']), float(show7.loc[show7.index[i], 'r_hb'])):+.1f}%"
-        show7.loc[show7.index[i], "RPM/Flow_%"] = "—" if pct(float(show7.loc[show7.index[i-1], "RPM_per_Flow"]), float(show7.loc[show7.index[i], "RPM_per_Flow"])) is None else f"{pct(float(show7.loc[show7.index[i-1], 'RPM_per_Flow']), float(show7.loc[show7.index[i], 'RPM_per_Flow'])):+.1f}%"
+        p_dp = pct(float(show7.loc[show7.index[i-1], "DeltaP"]), float(show7.loc[show7.index[i], "DeltaP"]))
+        p_r = pct(float(show7.loc[show7.index[i-1], "r"]), float(show7.loc[show7.index[i], "r"]))
+        p_rhb = pct(float(show7.loc[show7.index[i-1], "r_hb"]), float(show7.loc[show7.index[i], "r_hb"]))
+        p_rpmf = pct(float(show7.loc[show7.index[i-1], "RPM_per_Flow"]), float(show7.loc[show7.index[i], "RPM_per_Flow"]))
+        show7.loc[show7.index[i], "ΔP_%"] = "—" if p_dp is None else f"{p_dp:+.1f}%"
+        show7.loc[show7.index[i], "r_%"] = "—" if p_r is None else f"{p_r:+.1f}%"
+        show7.loc[show7.index[i], "r/Hb_%"] = "—" if p_rhb is None else f"{p_rhb:+.1f}%"
+        show7.loc[show7.index[i], "RPM/Flow_%"] = "—" if p_rpmf is None else f"{p_rpmf:+.1f}%"
 
     st.markdown("<div class='card'><h3>🗓️ Last 7 Days (Daily-first)</h3></div>", unsafe_allow_html=True)
     st.dataframe(show7, use_container_width=True, hide_index=True)
 
     # ----------------------------
-    # Trend plots (RAW only, no smoothing)
+    # Trend plots (RAW only)
     # ----------------------------
-    st.markdown("<div class='card'><h3>📈 Trend Plots (Raw)</h3><p>No smoothing. Axes: ΔP 0–50, r 0–30.</p></div>", unsafe_allow_html=True)
+    st.markdown("<div class='card'><h3>📈 Trend Plots (Raw)</h3><p>No smoothing.</p></div>", unsafe_allow_html=True)
 
     def stats_text(series: pd.Series, fmt: str):
         s = pd.to_numeric(series, errors="coerce").dropna()
@@ -342,11 +343,9 @@ else:
             return "N=0"
         return f"Mean {fmt.format(s.mean())} | Max {fmt.format(s.max())} | Min {fmt.format(s.min())} | Median {fmt.format(s.median())} | N={len(s)}"
 
-    # Use All records trend for visibility (you have 60+ points)
-    # Filter control
     cA, cB = st.columns(2)
     with cA:
-        last_n_days = st.slider("Show last N days (for plots & correlation)", 1, 60, 14)
+        last_n_days = st.slider("Show last N days (plots & correlation)", 1, 60, 14)
     with cB:
         use_daily_first_only = st.checkbox("Use Daily-first only (plots)", value=False)
 
@@ -386,7 +385,7 @@ else:
     st.pyplot(fig, clear_figure=True)
     st.caption(stats_text(df_view["r"], "{:.2f}"))
 
-    # r/Hb (auto y)
+    # r/Hb (auto)
     fig, ax = plt.subplots()
     ax.plot(df_view["RecordedAt_dt"], df_view["r_hb"], marker="o")
     ax.set_title("r/Hb Trend")
@@ -396,7 +395,7 @@ else:
     st.pyplot(fig, clear_figure=True)
     st.caption(stats_text(df_view["r_hb"], "{:.3f}"))
 
-    # RPM/Flow (auto y)
+    # RPM/Flow (auto)
     fig, ax = plt.subplots()
     ax.plot(df_view["RecordedAt_dt"], df_view["RPM_per_Flow"], marker="o")
     ax.set_title("RPM / Flow Trend")
@@ -412,15 +411,70 @@ else:
     st.markdown("<div class='card'><h3>🔎 Correlation Investigation</h3><p>Pearson & Spearman correlation matrices for ΔP, r, r/Hb, RPM/Flow.</p></div>", unsafe_allow_html=True)
 
     corr_df = df_view[["DeltaP", "r", "r_hb", "RPM_per_Flow"]].apply(pd.to_numeric, errors="coerce").dropna()
-
     if len(corr_df) < 3:
         st.warning("Not enough complete rows for correlation (need ≥ 3).")
     else:
-        pear = corr_df.corr(method="pearson")
-        spear = corr_df.corr(method="spearman")
+        pear = corr_df.corr(method="pearson").round(3)
+        spear = corr_df.corr(method="spearman").round(3)
 
         st.subheader("Pearson correlation")
-        st.dataframe(pear.round(3), use_container_width=True)
+        st.dataframe(pear, use_container_width=True)
 
         st.subheader("Spearman correlation")
-        st.dataframe(spear.round(3), use_container_width=True)
+        st.dataframe(spear, use_container_width=True)
+
+    # ----------------------------
+    # Scatter selector (X/Y) + Pearson/Spearman for the selected pair
+    # ----------------------------
+    st.markdown("<div class='card'><h3>🎯 Scatter Selector</h3><p>Select X and Y to visualize relationship + show Pearson/Spearman.</p></div>", unsafe_allow_html=True)
+
+    var_map = {
+        "Delta P (mmHg)": "DeltaP",
+        "r (ΔP/Flow)": "r",
+        "r/Hb (ΔP/Flow/Hb)": "r_hb",
+        "RPM/Flow": "RPM_per_Flow"
+    }
+
+    c1, c2, c3 = st.columns([2, 2, 2])
+    with c1:
+        x_label = st.selectbox("X axis", list(var_map.keys()), index=1)
+    with c2:
+        y_label = st.selectbox("Y axis", list(var_map.keys()), index=3)
+    with c3:
+        show_line = st.checkbox("Show linear trend line", value=True)
+
+    x_col = var_map[x_label]
+    y_col = var_map[y_label]
+
+    pair = df_view[[x_col, y_col]].apply(pd.to_numeric, errors="coerce").dropna()
+    if len(pair) < 3:
+        st.warning("Not enough points for scatter/correlation (need ≥ 3).")
+    else:
+        pear_xy = pair[x_col].corr(pair[y_col], method="pearson")
+        spear_xy = pair[x_col].corr(pair[y_col], method="spearman")
+
+        st.write(f"**Pearson:** {pear_xy:.3f}   |   **Spearman:** {spear_xy:.3f}   |   **N:** {len(pair)}")
+
+        fig, ax = plt.subplots()
+        ax.scatter(pair[x_col], pair[y_col])
+        ax.set_xlabel(x_label)
+        ax.set_ylabel(y_label)
+        ax.set_title(f"{y_label} vs {x_label}")
+
+        if show_line:
+            # simple linear fit without numpy: slope = cov/var
+            x = pair[x_col].astype(float)
+            y = pair[y_col].astype(float)
+            x_mean = x.mean()
+            y_mean = y.mean()
+            var_x = ((x - x_mean) ** 2).mean()
+            if var_x > 0:
+                cov_xy = ((x - x_mean) * (y - y_mean)).mean()
+                slope = cov_xy / var_x
+                intercept = y_mean - slope * x_mean
+
+                xs = pd.Series([x.min(), x.max()])
+                ys = slope * xs + intercept
+                ax.plot(xs, ys)
+
+        st.pyplot(fig, clear_figure=True)

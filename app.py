@@ -38,6 +38,43 @@ page_bg = "#FFF9E6" if page == "Data Entry & Records Page" else "#EAF4FF"
 st.markdown(
     f"""
     <style>
+/* ---------- ICU MODE TUNING ---------- */
+:root {
+  --icu-font: 18px;
+  --icu-title: 30px;
+  --icu-card-pad: 18px;
+  --icu-border: 2px;
+}
+
+body[data-icu="1"] {
+  font-size: var(--icu-font) !important;
+}
+
+body[data-icu="1"] .hero-title {
+  font-size: var(--icu-title) !important;
+}
+
+body[data-icu="1"] .card {
+  padding: var(--icu-card-pad) !important;
+  border-width: var(--icu-border) !important;
+}
+
+body[data-icu="1"] label {
+  font-size: 18px !important;
+}
+
+body[data-icu="1"] .stNumberInput input,
+body[data-icu="1"] .stDateInput input,
+body[data-icu="1"] .stTimeInput input {
+  font-size: 22px !important;
+  padding: 10px 12px !important;
+}
+
+body[data-icu="1"] .stButton button {
+  font-size: 20px !important;
+  padding: 14px 16px !important;
+}
+    
       .stApp {{ background-color: {page_bg}; }}
       .card {{
         border: 1px solid rgba(0,0,0,0.08);

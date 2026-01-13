@@ -8,11 +8,27 @@ from datetime import datetime, time, timedelta
 # ======================================================
 st.set_page_config(page_title="ECMO Trend Analyzer", layout="wide")
 
-page = st.radio(
-    "Page",
-    ["Data Entry & Records Page", "Charts & Analysis Page"],
-    horizontal=True
-)
+# ---------- Page + ICU mode state ----------
+if "page" not in st.session_state:
+    st.session_state.page = "Data Entry & Records Page"
+
+if "icu_mode" not in st.session_state:
+    st.session_state.icu_mode = False
+
+def go(page_name: str):
+    st.session_state.page = page_name
+
+# ---------- Card-style page switcher ----------
+c1, c2, c3 = st.columns([2, 2, 2])
+
+with c1:
+    st.button("📝 Data Entry", use_container_width=True, on_click=go, args=("Data Entry & Records Page",))
+with c2:
+    st.button("📊 Analysis", use_container_width=True, on_click=go, args=("Charts & Analysis Page",))
+with c3:
+    st.session_state.icu_mode = st.toggle("🩺 ICU Mode", value=st.session_state.icu_mode)
+
+page = st.session_state.page
 
 # ======================================================
 # Background + simple UI
